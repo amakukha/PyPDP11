@@ -2,19 +2,26 @@
 
 # This is a translation of Julius Schmidt's PDP-11 emulator in JavaScript.
 # You can run it in your browser: http://pdp11.aiju.de
-# (c) 2019 Andriy Makukha, MIT Licence
+# (c) 2011, Julius Schmidt, JavaScript implementation, MIT License
+# (c) 2019, Andriy Makukha, ported to Python 3, MIT License
+# Version 6 Unix (in the disk image) is available under the four-clause BSD license.
+
+import time, array
 
 class System:
     
     INTRK = 1
 
     def __init__(self):
-        self.memory = bytearray()
+        self.memory = array.array('H', bytearray(256*1024*[0]))     # 16-bit unsigned values
+        print ('Memory initialized')
 
     def interrupt(self, intr, y):
         pass
 
-    def event(self, evn):
+    def event(self, *evn):
+        # 'rkbusy'  = document.getElementById('rkbusy').style.display = '';
+        # 'rkready' = document.getElementById('rkbusy').style.display = 'none';
         pass
 
     def panic(self, msg):
@@ -39,6 +46,12 @@ class RK05:
         self.disk = bytearray(open(RK05.IMAGE_FILENAME, 'rb').read())
         if len(self.disk) != RK05.EXPECTED_IMAGE_LENGTH:
             self.system.panic('unexpected image length {} != {}'.format(len(self.disk), RK05.EXPECTED_IMAGE_LENGTH))
+        print ('Disk image loaded:', len(self.disk))
+        max_bytes = 0o313*0o14*2*512
+        if len(self.disk) < max_bytes:
+            extend_by = max_bytes - len(self.disk)
+            self.disk.extend(bytearray(extend_by*[0])) 
+            print (' - free space:', extend_by)
 
         # Position of the head
         self.drive = 0

@@ -1,18 +1,34 @@
 #!/usr/bin/env python3
 
 # This is a translation of Julius Schmidt's PDP-11 emulator in JavaScript.
-# You can run it in your browser: http://pdp11.aiju.de
+# You can run that one in your browser: http://pdp11.aiju.de
 # (c) 2011, Julius Schmidt, JavaScript implementation, MIT License
 # (c) 2019, Andriy Makukha, ported to Python 3, MIT License
 # Version 6 Unix (in the disk image) is available under the four-clause BSD license.
 
-def ostr(d, n=6):
-    return format '0o{{:0{}o}}'.format(n).format(d)
+import time, array
+
+from rk05 import RK05
+from cons import Terminal, ostr
+from interrupt import Interrupt
+from disasm import DISASM_TABLE
+
+INT = Interrupt     # shorthand for Interrupt
 
 class Trap(Exception):
     def __init__(self, num, *args):
         Exception.__init__(self, *args)
         self.num = num
+
+class Page:
+    def __init__(self, par, pdr):
+        self.par = par
+        self.pdr = pdr
+        self.addr = par & 0o7777
+        self.len = (pdr >> 8) & 0x7F
+        self.read = (pdr & 2) == 2
+        self.write = (pdr & 6) == 6
+        self.ed = (pdr & 8) == 8
 
 class PDP11:
 
@@ -21,1014 +37,1146 @@ class PDP11:
     FLAGV = 2
     FLAGC = 1
 
-    # Traps
-    INTBUS     = 0004
-    INTINVAL   = 0010
-    INTDEBUG   = 0014
-    INTIOT     = 0020
-    INTTTYIN   = 0060
-    INTTTYOUT  = 0064
-    INTFAULT   = 0250
-    INTCLOCK   = 0100
-    INTRK      = 0220
-
     BOOTROM = [
-        0042113,                        ## "KD" 
-        0012706, 02000,                 ## MOV #boot_start, SP 
-        0012700, 0000000,               ## MOV #unit, R0        ; unit number 
-        0010003,                        ## MOV R0, R3 
-        0000303,                        ## SWAB R3 
-        0006303,                        ## ASL R3 
-        0006303,                        ## ASL R3 
-        0006303,                        ## ASL R3 
-        0006303,                        ## ASL R3 
-        0006303,                        ## ASL R3 
-        0012701, 0177412,               ## MOV #RKDA, R1        ; csr 
-        0010311,                        ## MOV R3, (R1)         ; load da 
-        0005041,                        ## CLR -(R1)            ; clear ba 
-        0012741, 0177000,               ## MOV #-256.*2, -(R1)  ; load wc 
-        0012741, 0000005,               ## MOV #READ+GO, -(R1)  ; read & go 
-        0005002,                        ## CLR R2 
-        0005003,                        ## CLR R3 
-        0012704, 02020,                 ## MOV #START+20, R4 
-        0005005,                        ## CLR R5 
-        0105711,                        ## TSTB (R1) 
-        0100376,                        ## BPL .-2 
-        0105011,                        ## CLRB (R1) 
-        0005007                         ## CLR PC 
+        0o042113,                        ## "KD" 
+        0o012706, 0o2000,                ## MOV #boot_start, SP 
+        0o012700, 0o000000,              ## MOV #unit, R0        ; unit number 
+        0o010003,                        ## MOV R0, R3 
+        0o000303,                        ## SWAB R3 
+        0o006303,                        ## ASL R3 
+        0o006303,                        ## ASL R3 
+        0o006303,                        ## ASL R3 
+        0o006303,                        ## ASL R3 
+        0o006303,                        ## ASL R3 
+        0o012701, 0o177412,              ## MOV #RKDA, R1        ; csr 
+        0o010311,                        ## MOV R3, (R1)         ; load da 
+        0o005041,                        ## CLR -(R1)            ; clear ba 
+        0o012741, 0o177000,              ## MOV #-256.*2, -(R1)  ; load wc 
+        0o012741, 0o000005,              ## MOV #READ+GO, -(R1)  ; read & go 
+        0o005002,                        ## CLR R2 
+        0o005003,                        ## CLR R3 
+        0o012704, 0o2020,                ## MOV #START+20, R4 
+        0o005005,                        ## CLR R5 
+        0o105711,                        ## TSTB (R1) 
+        0o100376,                        ## BPL .-2 
+        0o105011,                        ## CLRB (R1) 
+        0o005007                         ## CLR PC 
     ]
 
+    RS = ["R0", "R1", "R2", "R3", "R4", "R5", "SP", "PC"]
+
     def __init__(self):
-        self.pr = false
+        # TODO: why are these not in reset()
+        self.prdebug = False
+        self.SR2 = 0
+        #self.lastPCs = []
+        self.interrupts = []
+        self.lastTime = time.time()
+        self.running = True
+
+        # Terminal
+        self.terminal = Terminal(self)
+
+        # Magnetic disk drive
+        self.rk = RK05(self)
+
+        self.reset()
+    
+    def reset(self):
         self.R = [0, 0, 0, 0, 0, 0, 0, 0]       # registers
         self.KSP = 0        # kernel stack pointer
         self.USP = 0        # user stack pointer
         self.PS = 0         # processor status
         self.curPC = 0      # address of current instruction
-        self.lastPCs = []
-        self.inst = 0       # current instruction
+        self.instr = 0      # current instruction
         self.memory = array.array('H', bytearray(256*1024*[0]))     # 16-bit unsigned values
-        self.tim1 = 0
-        self.tim2 = 0
         self.ips = 0
         self.SR0 = 0
-        self.SR2 = 0
-        self.curuser = 0
-        self.prevuser = 0
-        self.LKS = 0
+        self.curuser = False
+        self.prevuser = False
+        self.LKS = 1<<7     # value from reset()
+        self.step_cnt = 0
+
+        # from reset():
+        for i in range(len(PDP11.BOOTROM)):
+            self.memory[0o1000+i] = PDP11.BOOTROM[i]
+        self.pages = [Page(0, 0) for _ in range(16)]
+        self.R[7] = 0o2002
+
+        self.cleardebug()
+        self.terminal.clear()
+        self.rk.reset()
+
         self.clkcounter = 0
-        self.waiting = false
-        self.interrupts = []
-
-        self.pages = [0]*16
-
-def
-xor(a,b)
-{
-	return (a || b) && !(a && b);
+        self.waiting = False
 
 
-def
-switchmode(newm)
+    @staticmethod
+    def _xor(a, b):
+        return (a or b) and not (a and b)
 
-	prevuser = curuser;
-	curuser = newm;
-	if(prevuser) USP = R[6];
-	else KSP = R[6];
-	if(curuser) R[6] = USP;
-	else R[6] = KSP;
-	PS &= 0007777;
-	if(curuser) PS |= (1<<15)|(1<<14);
-	if(prevuser) PS |= (1<<13)|(1<<12);
+
+    def switchmode(self, newmode):
+        self.prevuser = self.curuser
+        self.curuser = newmode
+        if self.prevuser:
+            self.USP = self.R[6]
+        else:
+            self.KSP = self.R[6]
+        if self.curuser:
+            self.R[6] = self.USP
+        else:
+            self.R[6] = self.KSP
+        self.PS &= 0o007777
+        if self.curuser:
+            self.PS |= (1<<15) | (1<<14)
+        if self.prevuser:
+            self.PS |= (1<<13) | (1<<12)
 
 
     def physread16(self, addr):
-	if addr & 1:
-            raise(Trap(INTBUS, 'read from odd address ' + ostr(addr,6)))
-	if addr < 0o760000:
+        if addr & 1:
+            raise(Trap(INT.BUS, 'read from odd address ' + ostr(addr,6)))
+        if addr < 0o760000:
             return self.memory[addr>>1]
-	if addr == 0o777546:
+        if addr == 0o777546:
             return self.LKS
-	if addr == 0o777570:         # what does this do? 0o173030 = 63000
+        if addr == 0o777570:         # what does this do? 0o173030 = 63000
             return 0o173030
-	if addr == 0o777572:
+        if addr == 0o777572:
             return self.SR0
-	if addr == 0o777576:
+        if addr == 0o777576:
             return self.SR2
-	if addr == 0o777776:
+        if addr == 0o777776:
             return self.PS
-	if (addr & 0o777770) == 0o777560: 
-            return self.consread16(addr)
-	if (addr & 0o777760) == 0o777400:
-            return self.rkread16(addr)
-	if (addr & 0o777600) == 0o772200 || (a & 0o777600) == 0o777600:
+        if (addr & 0o777770) == 0o777560: 
+            return self.terminal.consread16(addr)
+        if (addr & 0o777760) == 0o777400:
+            return self.rk.read16(addr)
+        if (addr & 0o777600) == 0o772200 or (addr & 0o777600) == 0o777600:
             return self.mmuread16(addr)
-	if addr == 0o776000:
+        if addr == 0o776000:
             self.panic('lolwut')
-	raise(Trap(INTBUS, 'read from invalid address ' + ostr(addr,6)))
+        raise(Trap(INT.BUS, 'read from invalid address ' + ostr(addr,6)))
 
 
-def
-physread8(a)
-	var val;
-	val = physread16(a & ~1);
-	if(a & 1) return val >> 8;
-	return val & 0xFF;
+    def physread8(self, addr):
+        val = self.physread16(addr & ~1)
+        if addr & 1:
+            return val >> 8
+        return val & 0xFF
 
-def
-physwrite8(a,v)
-	if(a < 0760000) {
-		if(a & 1) {
-			memory[a>>1] &= 0xFF;
-			memory[a>>1] |= (v & 0xFF) << 8;
-		} else {
-			memory[a>>1] &= 0xFF00;
-			memory[a>>1] |= v & 0xFF;
-		}
-	} else {
-		if(a & 1) {
-			physwrite16(a&~1, (physread16(a) & 0xFF) | ((v & 0xFF) << 8));
-		} else {
-			physwrite16(a&~1, (physread16(a) & 0xFF00) | (v & 0xFF));
-		}
-	}
+    def physwrite8(self, a, v):
+        if a < 0o760000:
+            if a & 1:
+                self.memory[a>>1] &= 0xFF
+                self.memory[a>>1] |= (v & 0xFF) << 8
+            else:
+                self.memory[a>>1] &= 0xFF00
+                self.memory[a>>1] |= v & 0xFF
+        else:
+            if a & 1:
+                self.physwrite16(a&~1, (self.physread16(a) & 0xFF) | ((v & 0xFF) << 8))
+            else:
+                self.physwrite16(a&~1, (self.physread16(a) & 0xFF00) | (v & 0xFF))
 
-def
-physwrite16(a,v)
+    def physwrite16(self, a, v):
+        if a % 1:
+            raise(Trap(INT.BUS, "write to odd address " + ostr(a,6)))
+        if a < 0o760000:
+            self.memory[a>>1] = v
+        elif a == 0o777776:
+            bits = (v >> 14) & 3
+            if bits == 0:
+                self.switchmode(False)
+            elif bits == 3:
+                self.switchmode(True)
+            else:
+                self.panic("invalid mode")
+            bits = (v >> 12) & 3
+            if bits == 0:
+                self.prevuser = False
+            elif bits == 3:
+                self.prevuser = True
+            else:
+                self.panic("invalid mode")
+            self.PS = v
+        elif a == 0o777546:
+            self.LKS = v
+        elif a == 0o777572:
+            self.SR0 = v
+        elif (a & 0o777770) == 0o777560:
+            self.terminal.conswrite16(a, v)
+        elif (a & 0o777700) == 0o777400:
+            self.rk.write16(a,v)
+        elif (a & 0o777600) == 0o772200 or (a & 0o777600) == 0o777600:
+            self.mmuwrite16(a,v)
+        else:
+            raise(Trap(INT.BUS, "write to invalid address " + ostr(a,6)))
 
-	if(a % 1) raise(Trap(INTBUS, "write to odd address " + ostr(a,6)))
-	if(a < 0760000) memory[a>>1] = v;
-	else if(a == 0777776) {
-		switch(v >> 14) {
-		case 0: switchmode(false); break;
-		case 3: switchmode(true); break;
-		default: panic("invalid mode");
-		}
-		switch((v >> 12) & 3) {
-		case 0: prevuser = false; break;
-		case 3: prevuser = true; break;
-		default: panic("invalid mode");
-		}
-		PS = v;
-	}
-	else if(a == 0777546) LKS = v;
-	else if(a == 0777572) SR0 = v;
-	else if((a & 0777770) == 0777560) conswrite16(a,v);
-	else if((a & 0777700) == 0777400) rkwrite16(a,v);
-	else if((a & 0777600) == 0772200 || (a & 0777600) == 0777600) mmuwrite16(a,v);
-	else raise(Trap(INTBUS, "write to invalid address " + ostr(a,6)))
 
-
-def
-decode(a,w,m)
-
-	var p, user, block, disp;
-	if(!(SR0 & 1)) {
-		if(a >= 0170000) a += 0600000;
-		return a;
-	}
-	user = m ? 8 : 0;
-	p = pages[(a >> 13) + user];
-	if(w && !p.write) {
-		SR0 = (1<<13) | 1;
-		SR0 |= (a >> 12) & ~1;
-		if(user) SR0 |= (1<<5)|(1<<6);
-		SR2 = curPC;
-		raise(Trap(INTFAULT, "write to read-only page " + ostr(a,6)))
-	}
-	if(!p.read) {
-		SR0 = (1<<15) | 1;
-		SR0 |= (a >> 12) & ~1;
-		if(user) SR0 |= (1<<5)|(1<<6);
-		SR2 = curPC;
-		raise(Trap(INTFAULT, "read from no-access page " + ostr(a,6)))
-	}
-	block = (a >> 6) & 0177;
-	disp = a & 077;
-	if(p.ed ? (block < p.len) : (block > p.len)) {
-		SR0 = (1<<14) | 1;
-		SR0 |= (a >> 12) & ~1;
-		if(user) SR0 |= (1<<5)|(1<<6);
-		SR2 = curPC;
-		raise(Trap(INTFAULT, "page length exceeded, address " + ostr(a,6) + " (block " + \
+    def decode(self, a, w, m):
+        #var p, user, block, disp
+        if not (self.SR0 & 1):
+            if a >= 0o170000:
+                a += 0o600000
+            return a
+        user = 8 if m else 0
+        p = self.pages[(a >> 13) + user]
+        if w and not p.write:
+            self.SR0 = (1<<13) | 1
+            self.SR0 |= (a >> 12) & ~1
+            if user:
+                self.SR0 |= (1<<5) | (1<<6)
+            self.SR2 = self.curPC
+            raise(Trap(INT.FAULT, "write to read-only page " + ostr(a,6)))
+        if not p.read:
+            self.SR0 = (1<<15) | 1
+            self.SR0 |= (a >> 12) & ~1
+            if user:
+                self.SR0 |= (1<<5)|(1<<6)
+            self.SR2 = self.curPC
+            raise(Trap(INT.FAULT, "read from no-access page " + ostr(a,6)))
+        block = (a >> 6) & 0o177
+        disp = a & 0o77
+        if (p.ed and (block < p.len)) or (not p.ed and (block > p.len)):
+                self.SR0 = (1<<14) | 1
+                self.SR0 |= (a >> 12) & ~1
+                if user:
+                    self.SR0 |= (1<<5)|(1<<6)
+                self.SR2 = self.curPC
+                raise(Trap(INT.FAULT, "page length exceeded, address " + ostr(a,6) + " (block " + \
                       ostr(block,3) + ") is beyond length " + ostr(p.len,3)))
-	}
-	if(w) p.pdr |= 1<<6;
-	return ((block + p.addr) << 6) + disp;
+        if w:
+            p.pdr |= 1<<6
+        return ((block + p.addr) << 6) + disp
 
 
-def
-createpage(par,pdr)
-
-	return {
-		par : par,
-		pdr : pdr,
-		addr : par & 07777,
-		len : (pdr >> 8) & 0x7F,
-		read : (pdr & 2) == 2,
-		write : (pdr & 6) == 6,
-		ed : (pdr & 8) == 8
-	};
-
-
-def
-mmuread16(a)
-
-	var i;
-	i = (a & 017)>>1;
-	if((a >= 0772300) && (a < 0772320))
-		return pages[i].pdr;
-	if((a >= 0772340) && (a < 0772360))
-		return pages[i].par;
-	if((a >= 0777600) && (a < 0777620))
-		return pages[i+8].pdr;
-	if((a >= 0777640) && (a < 0777660))
-		return pages[i+8].par;
-	raise(Trap(INTBUS, "invalid read from " + ostr(a,6)))
+    def mmuread16(self, a):
+        i = (a & 0o17)>>1
+        if (a >= 0o772300) and (a < 0o772320):
+                return self.pages[i].pdr
+        if (a >= 0o772340) and (a < 0o772360):
+                return self.pages[i].par
+        if (a >= 0o777600) and (a < 0o777620):
+                return self.pages[i+8].pdr
+        if (a >= 0o777640) and (a < 0o777660):
+                return self.pages[i+8].par
+        raise(Trap(INT.BUS, "invalid read from " + ostr(a,6)))
 
 
-def
-mmuwrite16(a, v)
+    def mmuwrite16(self, a, v):
+        i = (a & 0o17)>>1
+        if (a >= 0o772300) and (a < 0o772320):
+            self.pages[i] = Page(self.pages[i].par, v)
+        elif (a >= 0o772340) and (a < 0o772360):
+            self.pages[i] = Page(v, self.pages[i].pdr)
+        elif (a >= 0o777600) and (a < 0o777620):
+            self.pages[i+8] = Page(self.pages[i+8].par, v)
+        elif (a >= 0o777640) and (a < 0o777660):
+            self.pages[i+8] = Page(v, self.pages[i+8].pdr)
+        else:
+            raise(Trap(INT.BUS, "write to invalid address " + ostr(a,6)))
 
-	var i;
-	i = (a & 017)>>1;
-	if((a >= 0772300) && (a < 0772320)) {
-		pages[i] = createpage(pages[i].par, v);
-		return;
-	}
-	if((a >= 0772340) && (a < 0772360)) {
-		pages[i] = createpage(v, pages[i].pdr);
-		return;
-	}
-	if((a >= 0777600) && (a < 0777620)) {
-		pages[i+8] = createpage(pages[i+8].par, v);
-		return;
-	}
-	if((a >= 0777640) && (a < 0777660)) {
-		pages[i+8] = createpage(v, pages[i+8].pdr);
-		return;
-	}
-	raise(Trap(INTBUS, "write to invalid address " + ostr(a,6)))
+    def read8(self, a):
+        return self.physread8(self.decode(a, False, self.curuser))
 
+    def read16(self, a):
+        return self.physread16(self.decode(a, False, self.curuser))
 
-def
-read8(a)
+    def write8(self, a, v):
+        return self.physwrite8(self.decode(a, True, self.curuser), v)
 
-	return physread8(decode(a, false, curuser));
+    def write16(self, a, v):
+        return self.physwrite16(self.decode(a, True, self.curuser), v)
 
+    def fetch16(self):
+        val = self.read16(self.R[7])
+        self.R[7] += 2
+        return val
 
-def
-read16(a)
+    def push(self, v):
+        self.R[6] -= 2
+        self.write16(self.R[6], v)
 
-	return physread16(decode(a, false, curuser));
+    def pop(self):
+        val = self.read16(self.R[6])
+        self.R[6] += 2
+        return val
 
+    def disasmaddr(self, m, a):
+        if (m & 7) == 7:
+            if m ==  0o27:
+                a[0] += 2
+                return "$" + oct(self.memory[a[0]>>1])[2:]
+            elif m == 0o37:
+                a[0] += 2
+                return "*" + oct(self.memory[a[0]>>1])[2:]
+            elif m == 0o67:
+                a[0] += 2
+                return "*" + oct((a[0] + 2 + self.memory[a[0]>>1]) & 0xFFFF)[2:]
+            elif m == 0o77:
+                a[0] += 2
+                return "**" + oct((a[0] + 2 + self.memory[a[0]>>1]) & 0xFFFF)[2:]
+        r = PDP11.RS[m & 7]
+        bits = m & 0o70
+        if bits == 0o00:
+            return r
+        elif bits == 0o10:
+            return "(" + r + ")"
+        elif bits == 0o20:
+            return "(" + r + ")+"
+        elif bits == 0o30:
+            return "*(" + r + ")+"
+        elif bits == 0o40:
+            return "-(" + r + ")"
+        elif bits == 0o50:
+            return "*-(" + r + ")"
+        elif bits == 0o60:
+            a[0]+=2
+            return oct(self.memory[a[0]>>1])[2:] + "(" + r + ")"
+        elif bits == 0o70:
+            a[0]+=2
+            return "*" + oct(self.memory[a[0]>>1])[2:] + "(" + r + ")"
 
-def
-write8(a, v)
+    def disasm(self, a):
+        #var i, ins, l, msg, s, d;
+        ins = self.memory[a>>1]         # instruction
+        msg = None
+        for l in DISASM_TABLE:
+            if (ins & l[0]) == l[1]:
+                msg = l[2]
+                break
+        if not msg:
+            return "???"
+        if l[4] and ins & 0o100000:
+            msg += "B"
+        s = (ins & 0o7700) >> 6
+        d = ins & 0o77
+        o = ins & 0o377
+        aa = [a]
 
-	return physwrite8(decode(a, true, curuser),v);
-
-
-def
-write16(a, v)
-
-	return physwrite16(decode(a, true, curuser),v);
-
-
-def
-fetch16()
-
-	var val;
-	val = read16(R[7]);
-	R[7] += 2;
-	return val;
-
-
-def
-push(v)
-
-	R[6] -= 2;
-	write16(R[6], v);
-
-
-def
-pop(v)
-
-	var val;
-	val = read16(R[6], v);
-	R[6] += 2;
-	return val;
-
+        if l[3] == "SD" or l[3] == "D":
+            if l[3] == "SD":
+                msg += " " + self.disasmaddr(s, aa) + ","
+            msg += " " + self.disasmaddr(d, aa)
+        elif l[3] == "D":
+            msg += " " + self.disasmaddr(d, aa)
+        elif l[3] == "RO" or l[3] == "O":
+            if l[3] == "RO":
+                msg += " " + PDP11.RS[(ins & 0o700) >> 6] + ","; o &= 0o77
+            if o & 0x80:
+                msg += " -" + oct(2*((0xFF ^ o) + 1))[2:]
+            else:
+                msg += " +" + oct(2*o)[2:]
+        elif l[3] == "RD":
+            msg += " " + PDP11.RS[(ins & 0o700) >> 6] + ", " + self.disasmaddr(d, aa)
+        elif l[3] == "R":
+            msg += " " + PDP11.RS[ins & 7]
+        elif l[3] == "R3":
+            msg += " " + PDP11.RS[(ins & 0o700) >> 6]
+        return msg
 
     def cleardebug(self):
         # TODO: clean debugging window; maybe use callback here
         pass
 
-    def writedebug(self, msg):
+    @staticmethod
+    def writedebug(msg):
         # TODO: use for debugging window, print into stderr?; maybe use a callback here
-        print ('|', msg)
+        print(msg, end='')
+        #print('\n'.join(['| ' + m for m in msg.split('\n')]),end='')
 
     def printstate(self):
         # Display registers
-	self.writedebug(
-		"R0 = " + ostr(self.R[0]) + "\n" + \
-		"R1 = " + ostr(self.R[1]) + "\n" + \
-		"R2 = " + ostr(self.R[2]) + "\n" + \
-		"R3 = " + ostr(self.R[3]) + "\n" + \
-		"R4 = " + ostr(self.R[4]) + "\n" + \
-		"R5 = " + ostr(self.R[5]) + "\n" + \
-		"R6 = " + ostr(self.R[6]) + "\n" + \
-		"R7 = " + ostr(self.R[7])
+        self.writedebug(str(self.step_cnt)+'\n')
+        self.writedebug(
+                "R0 " + ostr(self.R[0]) + "  " + \
+                "R1 " + ostr(self.R[1]) + "  " + \
+                "R2 " + ostr(self.R[2]) + "  " + \
+                "R3 " + ostr(self.R[3]) + "  " + \
+                "R4 " + ostr(self.R[4]) + "  " + \
+                "R5 " + ostr(self.R[5]) + "  " + \
+                "R6 " + ostr(self.R[6]) + "  " + \
+                "R7 " + ostr(self.R[7]) + "\n"
         )
         self.writedebug( "[" + \
-            self.prevuser and "u" or "k" + \
-            self.curuser and "U" or "K" + \
-	    (self.PS & PDP11.FLAGN) and "N" or " " + \
-	    (self.PS & PDP11.FLAGZ) and "Z" or " " + \
-	    (self.PS & PDP11.FLAGV) and "V" or " " + \
-	    (self.PS & PDP11.FLAGC) and "C" or " "
+            ("u" if self.prevuser else "k") + \
+            ("U" if self.curuser else "K") + \
+            ("N" if (self.PS & PDP11.FLAGN) else " ") + \
+            ("Z" if (self.PS & PDP11.FLAGZ) else " ") + \
+            ("V" if (self.PS & PDP11.FLAGV) else " ") + \
+            ("C" if (self.PS & PDP11.FLAGC) else " ") + \
+            "]  instr " + ostr(self.curPC) + ": " + ostr(self.instr) + "   "
         )
-	self.writedebug("]  instr " + ostr(self.curPC) + ": " + ostr(self.instr)+"   ");
-	try:
-		self.writedebug(disasm(self.decode(self.curPC, false, self.curuser)))     # TODO: disasm
+        try:
+            decoded = self.decode(self.curPC, False, self.curuser)
+            self.writedebug(self.disasm(decoded) + "\n")
         except Exception:
             pass
-	self.writedebug('')
+        self.writedebug('\n')
 
     def panic(self, msg):
-	self.writedebug('PANIC: ' + msg)
-	self.printstate()
-	self.stop()
-	raise Exception(msg)
+        self.writedebug('PANIC: ' + msg + '\n')
+        self.printstate()
+        self.stop()
+        raise Exception(msg)
 
-def
-interrupt(vec, pri)
-
-	var i;
-	if(vec & 1) panic("Thou darst calling interrupt() with an odd vector number?");
-	for(i=0;i<interrupts.length;i++) {
-		if(interrupts[i].pri < pri)
-			break;
-	}
-	for(;i<interrupts.length;i++) {
-		if(interrupts[i].vec >= vec)
-			break;
-	}
-	interrupts.splice(i, 0, {vec: vec, pri: pri});
+    def interrupt(self, vec, pri):
+        if vec & 1:
+            self.panic("Thou darst calling interrupt() with an odd vector number?")
+        i = 0
+        while i<len(self.interrupts) and self.interrupts[i].pri >= pri:
+            i += 1
+        while i<len(self.interrupts) and self.interrupts[i].vec < vec:
+            i += 1
+        #print("INTERRUPT: vec = {:d} / pri = {:d}".format(vec, pri))
+        self.interrupts.insert(i, Interrupt(vec, pri))
 
 
-def
-handleinterrupt(vec)
-
-	try {
-		prev = PS;
-		switchmode(false);
-		push(prev);
-		push(R[7]);
-	} catch(e) {
-		if(e.num != undefined)
-			trapat(e.num, e.msg);
-		else raise(e;
-	}
-	R[7] = memory[vec>>1];
-	PS = memory[(vec>>1)+1];
-	if(prevuser) PS |= (1<<13)|(1<<12);
-	waiting = false;
-
-
-def
-trapat(vec, msg)
-
-	var prev;
-	if(vec & 1) panic("Thou darst calling trapat() with an odd vector number?");
-	writedebug("trap " + ostr(vec) + " occured: " + msg + "\n");
-	printstate();
-	try {
-		prev = PS;
-		switchmode(false);
-		push(prev);
-		push(R[7]);
-	} catch(e) {
-		if(e.num != undefined) {
-			writedebug("red stack trap!\n");
-			memory[0] = R[7];
-			memory[1] = prev;
-			vec = 4;
-		} else raise(e;
-	}
-	R[7] = memory[vec>>1];
-	PS = memory[(vec>>1)+1];
-	if(prevuser) PS |= (1<<13)|(1<<12);
-	waiting = false;
+    def handleinterrupt(self, vec):
+        try:
+            prev = self.PS
+            self.switchmode(False)
+            self.push(prev)
+            self.push(self.R[7])
+        except Exception as e:
+            if 'num' in e.__dict__:
+                self.trapat(e.num, str(e))
+            else:
+                raise(e)
+        self.R[7] = self.memory[vec>>1]
+        self.PS = self.memory[(vec>>1)+1]
+        if self.prevuser:
+            self.PS |= (1<<13) | (1<<12)
+        self.waiting = False
 
 
-def
-aget(v, l)
-
-	var addr;
-	if((v & 7) >= 6 || (v & 010)) l = 2;
-	if((v & 070) == 000) {
-		return -(v + 1);
-	}
-	switch(v & 060) {
-	case 000:
-		v &= 7;
-		addr = R[v & 7];
-		break;
-	case 020:
-		addr = R[v & 7];
-		R[v & 7] += l;
-		break;
-	case 040:
-		R[v & 7] -= l;
-		addr = R[v & 7];
-		break;
-	case 060:
-		addr = fetch16();
-		addr += R[v & 7];
-		break;
-	}
-	addr &= 0xFFFF;
-	if(v & 010) {
-		addr = read16(addr);
-	}
-	return addr;
+    def trapat(self, vec, msg):
+        #var prev;
+        if vec & 1:
+            self.panic("Thou darst calling trapat() with an odd vector number?")
+        self.writedebug("trap " + ostr(vec) + " occured: " + msg + "\n")
+        self.printstate()
+        try:
+            prev = self.PS
+            self.switchmode(False)
+            self.push(prev)
+            self.push(self.R[7])
+        except Exception as e:
+            if 'num' in e.__dir__:
+                self.writedebug("red stack trap!\n")
+                self.memory[0] = self.R[7]
+                self.memory[1] = prev
+                vec = 4
+            else:
+                raise(e)
+        self.R[7] = self.memory[vec>>1]
+        self.PS = self.memory[(vec>>1)+1]
+        if self.prevuser:
+            self.PS |= (1<<13) | (1<<12)
+        self.waiting = False
 
 
-def
-memread(a, l)
-
-	if(a < 0) {
-		if(l == 2)
-			return R[-(a + 1)];
-		else
-			return R[-(a + 1)] & 0xFF;
-	}
-	if(l == 2)
-		return read16(a);
-	return read8(a);
-
-
-def
-memwrite(a, l, v)
-
-	if(a < 0) {
-		if(l == 2)
-			R[-(a + 1)] = v;
-		else {
-			R[-(a + 1)] &= 0xFF00;
-			R[-(a + 1)] |= v;
-		}
-	} else if(l == 2)
-		write16(a, v);
-	else
-		write8(a, v);
+    def aget(self, v, l):
+        #var addr
+        if (v & 7) >= 6 or (v & 0o10):
+            l = 2
+        if (v & 0o70) == 0o00:
+            return -(v + 1)
+        bits = v & 0o60
+        if bits == 0o00:
+            v &= 7
+            addr = self.R[v & 7]
+        elif bits == 0o20:
+            addr = self.R[v & 7]
+            self.R[v & 7] += l
+        elif bits == 0o40:
+            self.R[v & 7] -= l
+            addr = self.R[v & 7]
+        elif bits == 0o60:
+            addr = self.fetch16()
+            addr += self.R[v & 7]
+        addr &= 0xFFFF
+        if v & 0o10:
+            addr = self.read16(addr)
+        return addr
 
 
-def
-branch(o)
-
-	if(o & 0x80) {
-		o = -(((~o)+1)&0xFF);
-	}
-	o <<= 1;
-	R[7] += o;
-
-
-def
-step()
-
-	var val, val1, val2, ia, da, sa, d, s, l, r, o, max, maxp, msb;
-	ips++;
-	if(waiting) return;
-	curPC = R[7];
-	ia = decode(R[7], false, curuser);
-	R[7] += 2;
-	lastPCs = lastPCs.slice(0,100);
-	lastPCs.splice(0, 0, ia);
-	instr = physread16(ia);
-	d = instr & 077;
-	s = (instr & 07700) >> 6;
-	l = 2 - (instr >> 15);
-	o = instr & 0xFF;
-	if(l == 2) {
-		max = 0xFFFF;
-		maxp = 0x7FFF;
-		msb = 0x8000;
-	}
-	else {
-		max = 0xFF;
-		maxp = 0x7F;
-		msb = 0x80;
-	}
-	switch(instr & 0070000) {
-	case 0010000: // MOV
-		sa = aget(s, l); val = memread(sa, l);
-		da = aget(d, l);
-		PS &= 0xFFF1;
-		if(val & msb) PS |= FLAGN;
-		if(val == 0) PS |= FLAGZ;
-		if(da < 0 && l == 1) {
-			l = 2;
-			if(val & msb) val |= 0xFF00;
-		}
-		memwrite(da, l, val);
-		return;
-	case 0020000: // CMP
-		sa = aget(s, l); val1 = memread(sa, l);
-		da = aget(d, l); val2 = memread(da, l);
-		val = (val1 - val2) & max;
-		PS &= 0xFFF0;
-		if(val == 0) PS |= FLAGZ;
-		if(val & msb) PS |= FLAGN;
-		if(((val1 ^ val2) & msb) && !((val2 ^ val) & msb)) PS |= FLAGV;
-		if(val1 < val2) PS |= FLAGC;
-		return;
-	case 0030000: // BIT
-		sa = aget(s, l); val1 = memread(sa, l);
-		da = aget(d, l); val2 = memread(da, l);
-		val = val1 & val2;
-		PS &= 0xFFF1;
-		if(val == 0) PS |= FLAGZ;
-		if(val & msb) PS |= FLAGN;
-		return;
-	case 0040000: // BIC
-		sa = aget(s, l); val1 = memread(sa, l);
-		da = aget(d, l); val2 = memread(da, l);
-		val = (max ^ val1) & val2;
-		PS &= 0xFFF1;
-		if(val == 0) PS |= FLAGZ;
-		if(val & msb) PS |= FLAGN;
-		memwrite(da, l, val);
-		return;
-	case 0050000: // BIS
-		sa = aget(s, l); val1 = memread(sa, l);
-		da = aget(d, l); val2 = memread(da, l);
-		val = val1 | val2;
-		PS &= 0xFFF1;
-		if(val == 0) PS |= FLAGZ;
-		if(val & msb) PS |= FLAGN;
-		memwrite(da, l, val);
-		return;
-	}
-	switch(instr & 0170000) {
-	case 0060000: // ADD
-		sa = aget(s, 2); val1 = memread(sa, 2);
-		da = aget(d, 2); val2 = memread(da, 2);
-		val = (val1 + val2) & 0xFFFF;
-		PS &= 0xFFF0;
-		if(val == 0) PS |= FLAGZ;
-		if(val & 0x8000) PS |= FLAGN;
-		if(!((val1 ^ val2) & 0x8000) && ((val2 ^ val) & 0x8000)) PS |= FLAGV;
-		if(val1 + val2 >= 0xFFFF) PS |= FLAGC;
-		memwrite(da, 2, val);
-		return;
-	case 0160000: // SUB
-		sa = aget(s, 2); val1 = memread(sa, 2);
-		da = aget(d, 2); val2 = memread(da, 2);
-		val = (val2 - val1) & 0xFFFF;
-		PS &= 0xFFF0;
-		if(val == 0) PS |= FLAGZ;
-		if(val & 0x8000) PS |= FLAGN;
-		if(((val1 ^ val2) & 0x8000) && !((val2 ^ val) & 0x8000)) PS |= FLAGV;
-		if(val1 > val2) PS |= FLAGC;
-		memwrite(da, 2, val);
-		return;
-	}
-	switch(instr & 0177000) {
-	case 0004000: // JSR
-		val = aget(d, l);
-		if(val < 0) break;
-		push(R[s & 7]);
-		R[s & 7] = R[7];
-		R[7] = val;
-		return;
-	case 0070000: // MUL
-		val1 = R[s & 7];
-		if(val1 & 0x8000) val1 = -((0xFFFF^val1)+1);
-		da = aget(d, l); val2 = memread(da, 2);
-		if(val2 & 0x8000) val2 = -((0xFFFF^val2)+1);
-		val = val1 * val2;
-		R[s & 7] = (val & 0xFFFF0000) >> 16;
-		R[(s & 7)|1] = val & 0xFFFF;
-		PS &= 0xFFF0;
-		if(val & 0x80000000) PS |= FLAGN;
-		if((val & 0xFFFFFFFF) == 0) PS |= FLAGZ;
-		if(val < (1<<15) || val >= ((1<<15)-1)) PS |= FLAGC;
-		return;
-	case 0071000: // DIV
-		val1 = (R[s & 7] << 16) | R[(s & 7) | 1];
-		da = aget(d, l); val2 = memread(da, 2);
-		PS &= 0xFFF0;
-		if(val2 == 0) {
-			PS |= FLAGC;
-			return;
-		}
-		if((val1 / val2) >= 0x10000){
-			PS |= FLAGV;
-			return;
-		}
-		R[s & 7] = (val1 / val2) & 0xFFFF;
-		R[(s & 7) | 1] = (val1 % val2) & 0xFFFF;
-		if(R[s & 7] == 0) PS |= FLAGZ;
-		if(R[s & 7] & 0100000) PS |= FLAGN;
-		if(val1 == 0) PS |= FLAGV;
-		return;
-	case 0072000: // ASH
-		val1 = R[s & 7];
-		da = aget(d, 2); val2 = memread(da, 2) & 077;
-		PS &= 0xFFF0;
-		if(val2 & 040) {
-			val2 = (077 ^ val2) + 1;
-			if(val1 & 0100000) {
-				val = 0xFFFF ^ (0xFFFF >> val2);
-				val |= val1 >> val2;
-			} else
-				val = val1 >> val2;
-			if(val1 & (1 << (val2 - 1))) PS |= FLAGC;
-		} else {
-			val = (val1 << val2) & 0xFFFF;
-			if(val1 & (1 << (16 - val2))) PS |= FLAGC;
-		}
-		R[s & 7] = val;
-		if(val == 0) PS |= FLAGZ;
-		if(val & 0100000) PS |= FLAGN;
-		if(xor(val & 0100000, val1 & 0100000)) PS |= FLAGV;
-		return;
-	case 0073000: // ASHC
-		val1 = (R[s & 7] << 16) | R[(s & 7) | 1];
-		da = aget(d, 2); val2 = memread(da, 2) & 077;
-		PS &= 0xFFF0;
-		if(val2 & 040) {
-			val2 = (077 ^ val2) + 1;
-			if(val1 & 0x80000000) {
-				val = 0xFFFFFFFF ^ (0xFFFFFFFF >> val2);
-				val |= val1 >> val2;
-			} else
-				val = val1 >> val2;
-			if(val1 & (1 << (val2 - 1))) PS |= FLAGC;
-		} else {
-			val = (val1 << val2) & 0xFFFFFFFF;
-			if(val1 & (1 << (32 - val2))) PS |= FLAGC;
-		}
-		R[s & 7] = (val >> 16) & 0xFFFF;
-		R[(s & 7)|1] = val & 0xFFFF;
-		if(val == 0) PS |= FLAGZ;
-		if(val & 0x80000000) PS |= FLAGN;
-		if(xor(val & 0x80000000, val1 & 0x80000000)) PS |= FLAGV;
-		return;
-	case 0074000: // XOR
-		val1 = R[s & 7];
-		da = aget(d, 2); val2 = memread(da, 2);
-		val = val1 ^ val2;
-		PS &= 0xFFF1;
-		if(val == 0) PS |= FLAGZ;
-		if(val & 0x8000) PS |= FLAGZ;
-		memwrite(da, 2, val);
-		return;
-	case 0077000: // SOB
-		if(--R[s & 7]) {
-			o &= 077;
-			o <<= 1;
-			R[7] -= o;
-		}
-		return;
-	}
-	switch(instr & 0077700) {
-	case 0005000: // CLR
-		PS &= 0xFFF0;
-		PS |= FLAGZ;
-		da = aget(d, l);
-		memwrite(da, l, 0);
-		return;
-	case 0005100: // COM
-		da = aget(d, l);
-		val = memread(da, l) ^ max;
-		PS &= 0xFFF0; PS |= FLAGC;
-		if(val & msb) PS |= FLAGN;
-		if(val == 0) PS |= FLAGZ;
-		memwrite(da, l, val);
-		return;
-	case 0005200: // INC
-		da = aget(d, l);
-		val = (memread(da, l) + 1) & max;
-		PS &= 0xFFF1;
-		if(val & msb) PS |= FLAGN | FLAGV;
-		if(val == 0) PS |= FLAGZ;
-		memwrite(da, l, val);
-		return;
-	case 0005300: // DEC
-		da = aget(d, l);
-		val = (memread(da, l) - 1) & max;
-		PS &= 0xFFF1;
-		if(val & msb) PS |= FLAGN;
-		if(val == maxp) PS |= FLAGV;
-		if(val == 0) PS |= FLAGZ;
-		memwrite(da, l, val);
-		return;
-	case 0005400: // NEG
-		da = aget(d, l);
-		val = (-memread(da, l)) & max;
-		PS &= 0xFFF0;
-		if(val & msb) PS |= FLAGN;
-		if(val == 0) PS |= FLAGZ;
-		else PS |= FLAGC;
-		if(val == 0x8000) PS |= FLAGV;
-		memwrite(da, l, val);
-		return;
-	case 0005500: // ADC
-		da = aget(d, l);
-		val = memread(da, l);
-		if(PS & FLAGC) {
-			PS &= 0xFFF0;
-			if((val + 1) & msb) PS |= FLAGN;
-			if(val == max) PS |= FLAGZ;
-			if(val == 0077777) PS |= FLAGV;
-			if(val == 0177777) PS |= FLAGC;
-			memwrite(da, l, (val+1) & max);
-		} else {
-			PS &= 0xFFF0;
-			if(val & msb) PS |= FLAGN;
-			if(val == 0) PS |= FLAGZ;
-		}
-		return;
-	case 0005600: // SBC
-		da = aget(d, l);
-		val = memread(da, l);
-		if(PS & FLAGC) {
-			PS &= 0xFFF0;
-			if((val - 1) & msb) PS |= FLAGN;
-			if(val == 1) PS |= FLAGZ;
-			if(val) PS |= FLAGC;
-			if(val == 0100000) PS |= FLAGV;
-			memwrite(da, l, (val-1) & max);
-		} else {
-			PS &= 0xFFF0;
-			if(val & msb) PS |= FLAGN;
-			if(val == 0) PS |= FLAGZ;
-			if(val == 0100000) PS |= FLAGV;
-			PS |= FLAGC;
-		}
-		return;
-	case 0005700: // TST
-		da = aget(d, l);
-		val = memread(da, l);
-		PS &= 0xFFF0;
-		if(val & msb) PS |= FLAGN;
-		if(val == 0) PS |= FLAGZ;
-		return;
-	case 0006000: // ROR
-		da = aget(d, l);
-		val = memread(da, l);
-		if(PS & FLAGC) val |= max+1;
-		PS &= 0xFFF0;
-		if(val & 1) PS |= FLAGC;
-		if(val & (max+1)) PS |= FLAGN;
-		if(!(val & max)) PS |= FLAGZ;
-		if(xor(val & 1, val & (max+1))) PS |= FLAGV;
-		val >>= 1;
-		memwrite(da, l, val);
-		return;
-	case 0006100: // ROL
-		da = aget(d, l);
-		val = memread(da, l) << 1;
-		if(PS & FLAGC) val |= 1;
-		PS &= 0xFFF0;
-		if(val & (max+1)) PS |= FLAGC;
-		if(val & msb) PS |= FLAGN;
-		if(!(val & max)) PS |= FLAGZ;
-		if((val ^ (val >> 1)) & msb) PS |= FLAGV;
-		val &= max;
-		memwrite(da, l, val);
-		return;
-	case 0006200: // ASR
-		da = aget(d, l);
-		val = memread(da, l);
-		PS &= 0xFFF0;
-		if(val & 1) PS |= FLAGC;
-		if(val & msb) PS |= FLAGN;
-		if(xor(val & msb, val & 1)) PS |= FLAGV;
-		val = (val & msb) | (val >> 1);
-		if(val == 0) PS |= FLAGZ;
-		memwrite(da, l, val);
-		return;
-	case 0006300: // ASL
-		da = aget(d, l);
-		val = memread(da, l);
-		PS &= 0xFFF0;
-		if(val & msb) PS |= FLAGC;
-		if(val & (msb >> 1)) PS |= FLAGN;
-		if((val ^ (val << 1)) & msb) PS |= FLAGV;
-		val = (val << 1) & max;
-		if(val == 0) PS |= FLAGZ;
-		memwrite(da, l, val);
-		return;
-	case 0006700: // SXT
-		da = aget(d, l);
-		if(PS & FLAGN) {
-			memwrite(da, l, max);
-		} else {
-			PS |= FLAGZ;
-			memwrite(da, l, 0);
-		}
-		return;
-	}
-	switch(instr & 0177700) {
-	case 0000100: // JMP
-		val = aget(d, 2);
-		if(val < 0) {
-			break;
-		}
-		R[7] = val;
-		return;
-	case 0000300: // SWAB
-		da = aget(d, l);
-		val = memread(da, l);
-		val = ((val >> 8) | (val << 8)) & 0xFFFF;
-		PS &= 0xFFF0;
-		if((val & 0xFF) == 0) PS |= FLAGZ;
-		if(val & 0x80) PS |= FLAGN;
-		memwrite(da, l, val);
-		return;
-	case 0006400: // MARK
-		R[6] = R[7] + (instr & 077) << 1;
-		R[7] = R[5];
-		R[5] = pop();
-		break;
-	case 0006500: // MFPI
-		da = aget(d, 2);
-		if(da == -7)
-			val = (curuser == prevuser) ? R[6] : (prevuser ? USP : KSP);
-		else if(da < 0)
-			panic("invalid MFPI instruction");
-		else
-			val = physread16(decode(da, false, prevuser));
-		push(val);
-		PS &= 0xFFF0; PS |= FLAGC;
-		if(val == 0) PS |= FLAGZ;
-		if(val & 0x8000) PS |= FLAGN;
-		return;
-	case 0006600: // MTPI
-		da = aget(d, 2);
-		val = pop();
-		if(da == -7) {
-			if(curuser == prevuser) R[6] = val;
-			else if(prevuser) USP = val;
-			else KSP = val;
-		} else if(da < 0)
-			panic("invalid MTPI instrution");
-		else {
-			sa = decode(da, true, prevuser);
-			physwrite16(sa, val);
-		}
-		PS &= 0xFFF0; PS |= FLAGC;
-		if(val == 0) PS |= FLAGZ;
-		if(val & 0x8000) PS |= FLAGN;
-		return;
-	}
-	if((instr & 0177770) == 0000200) { // RTS
-		R[7] = R[d & 7];
-		R[d & 7] = pop();
-		return;
-	}
-	switch(instr & 0177400) {
-	case 0000400: branch(o); return;
-	case 0001000: if(!(PS & FLAGZ)) branch(o); return;
-	case 0001400: if(PS & FLAGZ) branch(o); return;
-	case 0002000: if(!xor(PS & FLAGN, PS & FLAGV)) branch(o); return;
-	case 0002400: if(xor(PS & FLAGN, PS & FLAGV)) branch(o); return;
-	case 0003000: if(!xor(PS & FLAGN, PS & FLAGV) && !(PS & FLAGZ)) branch(o); return;
-	case 0003400: if(xor(PS & FLAGN, PS & FLAGV) || (PS & FLAGZ)) branch(o); return;
-	case 0100000: if(!(PS & FLAGN)) branch(o); return;
-	case 0100400: if(PS & FLAGN) branch(o); return;
-	case 0101000: if(!(PS & FLAGC) && !(PS & FLAGZ)) branch(o); return;
-	case 0101400: if((PS & FLAGC) || (PS & FLAGZ)) branch(o); return;
-	case 0102000: if(!(PS & FLAGV)) branch(o); return;
-	case 0102400: if(PS & FLAGV) branch(o); return;
-	case 0103000: if(!(PS & FLAGC)) branch(o); return;
-	case 0103400: if(PS & FLAGC) branch(o); return;
-	}
-	if((instr & 0177000) == 0104000 || instr == 3 || instr == 4) { // EMT TRAP IOT BPT
-		var vec, prev;
-		if((instr & 0177400) == 0104000) vec = 030;
-		else if((instr & 0177400) == 0104400) vec = 034;
-		else if(instr == 3) vec = 014;
-		else vec = 020;
-		prev = PS;
-		switchmode(false);
-		push(prev);
-		push(R[7]);
-		R[7] = memory[vec>>1];
-		PS = memory[(vec>>1)+1];
-		if(prevuser) PS |= (1<<13)|(1<<12);
-		return;
-	}
-	if((instr & 0177740) == 0240) { // CL?, SE?
-		if(instr & 020) {
-			PS |= instr & 017;
-		} else {
-			PS &= ~(instr & 017);
-		}
-		return;
-	}
-	switch(instr) {
-	case 0000000: // HALT
-		if(curuser) break;
-		writedebug("HALT\n");
-		printstate();
-		stop();
-		return;
-	case 0000001: // WAIT
-//		stop();
-//		setTimeout('LKS |= 0x80; interrupt(INTCLOCK, 6); run();', 20); // FIXME, really
-		if(curuser) break;
-		waiting = true;
-		return;
-	case 0000002: // RTI
-	case 0000006: // RTT
-		R[7] = pop();
-		val = pop();
-		if(curuser) {
-			val &= 047;
-			val |= PS & 0177730;
-		}
-		physwrite16(0777776, val);
-		return;
-	case 0000005: // RESET
-		if(curuser) return;
-		clearterminal();
-		rkreset();
-		return;
-	case 0170011: // SETD ; not needed by UNIX, but used; therefore ignored
-		return;
-	}
-	raise(Trap(INTINVAL, "invalid instruction"))
+    def memread(self, a, l):
+        if a < 0:
+            if l == 2:
+                return self.R[-(a + 1)]
+            else:
+                return self.R[-(a + 1)] & 0xFF
+        if l == 2:
+            return self.read16(a)
+        return self.read8(a)
 
 
-def
-reset()
-
-    alert("RESET");
-	var i;
-	for(i=0;i<7;i++) R[i] = 0;
-	PS = 0;
-	KSP = 0;
-	USP = 0;
-	curuser = false;
-	prevuser = false;
-	SR0 = 0;
-	curPC = 0;
-	instr = 0;
-	ips = 0;
-	LKS = 1<<7;
-	for(i=0;i<memory.length;i++) memory[i] = 0;
-	for(i=0;i<bootrom.length;i++) memory[01000+i] = bootrom[i];
-	for(i=0;i<16;i++) pages[i] = createpage(0, 0);
-	R[7] = 02002;
-	cleardebug();
-	clearterminal();
-	rkreset();
-	clkcounter = 0;
-	waiting = false;
+    def memwrite(self, a, l, v):
+        if a < 0:
+            if l == 2:
+                self.R[-(a + 1)] = v
+            else:
+                self.R[-(a + 1)] &= 0xFF00
+                self.R[-(a + 1)] |= v
+        elif l == 2:
+            self.write16(a, v)
+        else:
+            self.write8(a, v)
 
 
-def
-nsteps(self, n):
-	while(n--) {
-		try {
-			step();
-			if(interrupts.length && interrupts[0].pri >= ((PS >> 5) & 7)) {
-				handleinterrupt(interrupts[0].vec);
-				interrupts.splice(0, 1);
-			}
-			clkcounter++;
-			if(clkcounter >= 40000) {
-				clkcounter = 0;
-				LKS |= (1<<7);
-				if(LKS & (1<<6)) interrupt(INTCLOCK, 6);
-			}
-		} catch(e) {
-			if(e.num != undefined) {
-				trapat(e.num, e.msg);
-			} else raise(e;
-		}
-		if(pr)
-			printstate();
-	}
+    def branch(self, o):
+        if o & 0x80:
+            o = -(((~o)+1)&0xFF)
+        o <<= 1
+        self.R[7] += o
 
 
-def
-run() 
-	if(tim1 == undefined)
-		tim1 = setInterval('nsteps(4000);', 1);
-	if(tim2 == undefined)
-		tim2 = setInterval('document.getElementById("ips").innerHTML = ips; ips = 0;', 1000);
+    def step(self):
+        #var val, val1, val2, ia, da, sa, d, s, l, r, o, max, maxp, msb;
+        self.ips += 1
+        self.step_cnt += 1
+        if self.waiting:
+            return
+        self.curPC = self.R[7]
+        ia = self.decode(self.R[7], False, self.curuser)            # instruction address
+        self.R[7] += 2
+        #self.lastPCs = [ia] + self.lastPCs[0:100]                  # TODO: remove, not used
+        self.instr = self.physread16(ia)
+        d = self.instr & 0o77
+        s = (self.instr & 0o7700) >> 6
+        l = 2 - (self.instr >> 15)
+        o = self.instr & 0xFF
+        if l == 2:
+            max = 0xFFFF
+            maxp = 0x7FFF
+            msb = 0x8000
+        else:
+            max = 0xFF
+            maxp = 0x7F
+            msb = 0x80
+
+        # MOV / CMP / BIT / BIC / BIS
+        bits = self.instr & 0o070000
+        if bits == 0o010000: # MOV
+            sa = self.aget(s, l); val = self.memread(sa, l)
+            da = self.aget(d, l)
+            self.PS &= 0xFFF1
+            if val & msb:
+                self.PS |= PDP11.FLAGN
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if da < 0 and l == 1:
+                l = 2
+                if val & msb:
+                    val |= 0xFF00
+            self.memwrite(da, l, val)
+            return
+        elif bits == 0o020000: # CMP
+            sa = self.aget(s, l); val1 = self.memread(sa, l)
+            da = self.aget(d, l); val2 = self.memread(da, l)
+            val = (val1 - val2) & max
+            self.PS &= 0xFFF0
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & msb:
+                self.PS |= PDP11.FLAGN
+            if ((val1 ^ val2) & msb) and not ((val2 ^ val) & msb):
+                self.PS |= PDP11.FLAGV
+            if val1 < val2:
+                self.PS |= PDP11.FLAGC
+            return
+        elif bits == 0o030000: # BIT
+            sa = self.aget(s, l); val1 = self.memread(sa, l)
+            da = self.aget(d, l); val2 = self.memread(da, l)
+            val = val1 & val2
+            self.PS &= 0xFFF1
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & msb:
+                self.PS |= PDP11.FLAGN
+            return
+        elif bits == 0o040000: # BIC
+            sa = self.aget(s, l); val1 = self.memread(sa, l)
+            da = self.aget(d, l); val2 = self.memread(da, l)
+            val = (max ^ val1) & val2
+            self.PS &= 0xFFF1
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & msb:
+                self.PS |= PDP11.FLAGN
+            self.memwrite(da, l, val)
+            return
+        elif bits == 0o050000: # BIS
+            sa = self.aget(s, l); val1 = self.memread(sa, l)
+            da = self.aget(d, l); val2 = self.memread(da, l)
+            val = val1 | val2
+            self.PS &= 0xFFF1
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & msb:
+                self.PS |= PDP11.FLAGN
+            self.memwrite(da, l, val)
+            return
+
+        # ADD / SUB
+        bits = self.instr & 0o170000
+        if bits == 0o060000: # ADD
+            sa = self.aget(s, 2); val1 = self.memread(sa, 2)
+            da = self.aget(d, 2); val2 = self.memread(da, 2)
+            val = (val1 + val2) & 0xFFFF
+            self.PS &= 0xFFF0
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & 0x8000:
+                self.PS |= PDP11.FLAGN
+            if not ((val1 ^ val2) & 0x8000) and ((val2 ^ val) & 0x8000):
+                self.PS |= PDP11.FLAGV
+            if val1 + val2 >= 0xFFFF:
+                self.PS |= PDP11.FLAGC
+            self.memwrite(da, 2, val)
+            return
+        elif bits == 0o160000: # SUB
+            sa = self.aget(s, 2); val1 = self.memread(sa, 2)
+            da = self.aget(d, 2); val2 = self.memread(da, 2)
+            val = (val2 - val1) & 0xFFFF
+            self.PS &= 0xFFF0
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & 0x8000:
+                self.PS |= PDP11.FLAGN
+            if ((val1 ^ val2) & 0x8000) and not ((val2 ^ val) & 0x8000):
+                self.PS |= PDP11.FLAGV
+            if val1 > val2:
+                self.PS |= PDP11.FLAGC
+            self.memwrite(da, 2, val)
+            return
+
+        # JSR / MUL / DIV / ASH / ASHC / XOR / SOB
+        bits = self.instr & 0o177000
+        if bits == 0o004000: # JSR
+            val = self.aget(d, l)
+            if val >= 0:
+                self.push(self.R[s & 7])
+                self.R[s & 7] = self.R[7]
+                self.R[7] = val
+                return
+        elif bits == 0o070000: # MUL
+            val1 = self.R[s & 7]
+            if val1 & 0x8000:
+                val1 = -((0xFFFF^val1)+1)
+            da = self.aget(d, l); val2 = self.memread(da, 2)
+            if val2 & 0x8000:
+                val2 = -((0xFFFF^val2)+1)
+            val = val1 * val2
+            self.R[s & 7] = (val & 0xFFFF0000) >> 16
+            self.R[(s & 7)|1] = val & 0xFFFF
+            self.PS &= 0xFFF0
+            if val & 0x80000000:
+                self.PS |= PDP11.FLAGN
+            if (val & 0xFFFFFFFF) == 0:
+                self.PS |= PDP11.FLAGZ
+            if val < (1<<15) or val >= ((1<<15)-1):
+                self.PS |= PDP11.FLAGC
+            return
+        elif bits == 0o071000: # DIV
+            val1 = (self.R[s & 7] << 16) | self.R[(s & 7) | 1]
+            da = self.aget(d, l); val2 = self.memread(da, 2)
+            self.PS &= 0xFFF0
+            if val2 == 0:
+                self.PS |= PDP11.FLAGC
+                return
+            if (val1 / val2) >= 0x10000:
+                self.PS |= PDP11.FLAGV
+                return
+            self.R[s & 7] = (val1 // val2) & 0xFFFF
+            self.R[(s & 7) | 1] = (val1 % val2) & 0xFFFF
+            if self.R[s & 7] == 0:
+                self.PS |= PDP11.FLAGZ
+            if self.R[s & 7] & 0o100000:
+                self.PS |= PDP11.FLAGN
+            if val1 == 0:
+                self.PS |= PDP11.FLAGV
+            return
+        elif bits == 0o072000: # ASH
+            val1 = self.R[s & 7]
+            da = self.aget(d, 2); val2 = self.memread(da, 2) & 0o77
+            self.PS &= 0xFFF0
+            if val2 & 0o40:
+                val2 = (0o77 ^ val2) + 1
+                if val1 & 0o100000:
+                    val = 0xFFFF ^ (0xFFFF >> val2)
+                    val |= val1 >> val2
+                else:
+                    val = val1 >> val2
+                if val1 & (1 << (val2 - 1)):
+                    self.PS |= PDP11.FLAGC
+            else:
+                val = (val1 << val2) & 0xFFFF
+                if val1 & (1 << (16 - val2)):
+                    self.PS |= PDP11.FLAGC
+            self.R[s & 7] = val
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & 0o100000:
+                self.PS |= PDP11.FLAGN
+            if self._xor(val & 0o100000, val1 & 0o100000):
+                self.PS |= PDP11.FLAGV
+            return
+        elif bits == 0o073000: # ASHC
+            val1 = (self.R[s & 7] << 16) | self.R[(s & 7) | 1]
+            da = self.aget(d, 2); val2 = self.memread(da, 2) & 0o77
+            self.PS &= 0xFFF0
+            if val2 & 0o40:
+                val2 = (0o77 ^ val2) + 1
+                if val1 & 0x80000000:
+                    val = 0xFFFFFFFF ^ (0xFFFFFFFF >> val2)
+                    val |= val1 >> val2
+                else:
+                    val = val1 >> val2
+                if val1 & (1 << (val2 - 1)):
+                    self.PS |= PDP11.FLAGC
+            else:
+                val = (val1 << val2) & 0xFFFFFFFF
+                if val1 & (1 << (32 - val2)):
+                    self.PS |= PDP11.FLAGC
+            self.R[s & 7] = (val >> 16) & 0xFFFF
+            self.R[(s & 7)|1] = val & 0xFFFF
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & 0x80000000:
+                self.PS |= PDP11.FLAGN
+            if self._xor(val & 0x80000000, val1 & 0x80000000):
+                self.PS |= PDP11.FLAGV
+            return
+        elif bits == 0o074000: # XOR
+            val1 = self.R[s & 7]
+            da = self.aget(d, 2); val2 = self.memread(da, 2)
+            val = val1 ^ val2
+            self.PS &= 0xFFF1
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & 0x8000:
+                self.PS |= PDP11.FLAGZ
+            self.memwrite(da, 2, val)
+            return
+        elif bits == 0o077000: # SOB
+            self.R[s & 7] -= 1
+            if self.R[s & 7]:
+                o &= 0o77
+                o <<= 1
+                self.R[7] -= o
+            return
+
+        # CLR / COM / INC / DEC / NEG / ADC / SBC / TST / ROL / ROR / ASL / AST / SXT
+        bits = self.instr & 0o077700
+        if bits == 0o005000: # CLR
+            self.PS &= 0xFFF0
+            self.PS |= PDP11.FLAGZ
+            da = self.aget(d, l)
+            self.memwrite(da, l, 0)
+            return
+        elif bits == 0o005100: # COM
+            da = self.aget(d, l)
+            val = self.memread(da, l) ^ max
+            self.PS &= 0xFFF0; self.PS |= PDP11.FLAGC
+            if val & msb:
+                self.PS |= PDP11.FLAGN
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            self.memwrite(da, l, val)
+            return
+        elif bits == 0o005200: # INC
+            da = self.aget(d, l)
+            val = (self.memread(da, l) + 1) & max
+            self.PS &= 0xFFF1
+            if val & msb:
+                self.PS |= PDP11.FLAGN | PDP11.FLAGV
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            self.memwrite(da, l, val)
+            return
+        elif bits == 0o005300: # DEC
+            da = self.aget(d, l)
+            val = (self.memread(da, l) - 1) & max
+            self.PS &= 0xFFF1
+            if val & msb:
+                self.PS |= PDP11.FLAGN
+            if val == maxp:
+                self.PS |= PDP11.FLAGV
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            self.memwrite(da, l, val)
+            return
+        elif bits == 0o005400: # NEG
+            da = self.aget(d, l)
+            val = (-self.memread(da, l)) & max
+            self.PS &= 0xFFF0
+            if val & msb:
+                self.PS |= PDP11.FLAGN
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            else:
+                self.PS |= PDP11.FLAGC
+            if val == 0x8000:
+                self.PS |= PDP11.FLAGV
+            self.memwrite(da, l, val)
+            return
+        elif bits == 0o005500: # ADC
+            da = self.aget(d, l)
+            val = self.memread(da, l)
+            if self.PS & PDP11.FLAGC:
+                self.PS &= 0xFFF0
+                if (val + 1) & msb:
+                    self.PS |= PDP11.FLAGN
+                if val == max:
+                    self.PS |= PDP11.FLAGZ
+                if val == 0o077777:
+                    self.PS |= PDP11.FLAGV
+                if val == 0o177777:
+                    self.PS |= PDP11.FLAGC
+                self.memwrite(da, l, (val+1) & max)
+            else:
+                self.PS &= 0xFFF0
+                if val & msb:
+                    self.PS |= PDP11.FLAGN
+                if val == 0:
+                    self.PS |= PDP11.FLAGZ
+            return
+        elif bits == 0o005600: # SBC
+            da = self.aget(d, l)
+            val = self.memread(da, l)
+            if self.PS & PDP11.FLAGC:
+                self.PS &= 0xFFF0
+                if (val - 1) & msb:
+                    self.PS |= PDP11.FLAGN
+                if val == 1:
+                    self.PS |= PDP11.FLAGZ
+                if val:
+                    self.PS |= PDP11.FLAGC
+                if val == 0o100000:
+                    self.PS |= PDP11.FLAGV
+                self.memwrite(da, l, (val-1) & max)
+            else:
+                self.PS &= 0xFFF0
+                if val & msb:
+                    self.PS |= PDP11.FLAGN
+                if val == 0:
+                    self.PS |= PDP11.FLAGZ
+                if val == 0o100000:
+                    self.PS |= PDP11.FLAGV
+                self.PS |= PDP11.FLAGC
+            return
+        elif bits == 0o005700: # TST
+            da = self.aget(d, l)
+            val = self.memread(da, l)
+            self.PS &= 0xFFF0
+            if val & msb:
+                self.PS |= PDP11.FLAGN
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            return
+        elif bits == 0o006000: # ROR
+            da = self.aget(d, l)
+            val = self.memread(da, l)
+            if self.PS & PDP11.FLAGC:
+                val |= max+1
+            self.PS &= 0xFFF0
+            if val & 1:
+                self.PS |= PDP11.FLAGC
+            if val & (max+1):
+                self.PS |= PDP11.FLAGN
+            if not (val & max):
+                self.PS |= PDP11.FLAGZ
+            if self._xor(val & 1, val & (max+1)):
+                self.PS |= PDP11.FLAGV
+            val >>= 1
+            self.memwrite(da, l, val)
+            return
+        elif bits == 0o006100: # ROL
+            da = self.aget(d, l)
+            val = self.memread(da, l) << 1
+            if self.PS & PDP11.FLAGC:
+                val |= 1
+            self.PS &= 0xFFF0
+            if val & (max+1):
+                self.PS |= PDP11.FLAGC
+            if val & msb:
+                self.PS |= PDP11.FLAGN
+            if not (val & max):
+                self.PS |= PDP11.FLAGZ
+            if (val ^ (val >> 1)) & msb:
+                self.PS |= PDP11.FLAGV
+            val &= max
+            self.memwrite(da, l, val)
+            return
+        elif bits == 0o006200: # ASR
+            da = self.aget(d, l)
+            val = self.memread(da, l)
+            self.PS &= 0xFFF0
+            if val & 1:
+                self.PS |= PDP11.FLAGC
+            if val & msb:
+                self.PS |= PDP11.FLAGN
+            if self._xor(val & msb, val & 1):
+                self.PS |= PDP11.FLAGV
+            val = (val & msb) | (val >> 1)
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            self.memwrite(da, l, val)
+            return
+        elif bits == 0o006300: # ASL
+            da = self.aget(d, l)
+            val = self.memread(da, l)
+            self.PS &= 0xFFF0
+            if val & msb:
+                self.PS |= PDP11.FLAGC
+            if val & (msb >> 1):
+                self.PS |= PDP11.FLAGN
+            if (val ^ (val << 1)) & msb:
+                self.PS |= PDP11.FLAGV
+            val = (val << 1) & max
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            self.memwrite(da, l, val)
+            return
+        elif bits == 0o006700: # SXT
+            da = self.aget(d, l)
+            if self.PS & PDP11.FLAGN:
+                self.memwrite(da, l, max)
+            else:
+                self.PS |= PDP11.FLAGZ
+                self.memwrite(da, l, 0)
+            return
+
+        # JMP / SWAB / MARK / MFPI / MTPI
+        bits = self.instr & 0o177700
+        if bits == 0o000100: # JMP
+            val = self.aget(d, 2)
+            if val >= 0:
+                self.R[7] = val
+                return
+        elif bits == 0o000300: # SWAB
+            da = self.aget(d, l)
+            val = self.memread(da, l)
+            val = ((val >> 8) | (val << 8)) & 0xFFFF
+            self.PS &= 0xFFF0
+            if (val & 0xFF) == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & 0x80:
+                self.PS |= PDP11.FLAGN
+            self.memwrite(da, l, val)
+            return
+        elif bits == 0o006400: # MARK
+            self.R[6] = self.R[7] + (self.instr & 0o77) << 1
+            self.R[7] = self.R[5]
+            self.R[5] = self.pop()
+            # TODO: no return here?
+        elif bits == 0o006500: # MFPI
+            da = self.aget(d, 2)
+            if da == -7:
+                val = self.R[6] if (self.curuser == self.prevuser) else (self.USP if self.prevuser else self.KSP)
+            elif da < 0:
+                self.panic("invalid MFPI instruction")
+            else:
+                val = self.physread16(self.decode(da, False, self.prevuser))
+            self.push(val)
+            self.PS &= 0xFFF0; self.PS |= PDP11.FLAGC
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & 0x8000:
+                self.PS |= PDP11.FLAGN
+            return
+        elif bits == 0o006600: # MTPI
+            da = self.aget(d, 2)
+            val = self.pop()
+            if da == -7:
+                if self.curuser == self.prevuser:
+                    self.R[6] = val
+                elif self.prevuser:
+                    self.USP = val
+                else:
+                    self.KSP = val
+            elif da < 0:
+                self.panic("invalid MTPI instrution")
+            else:
+                sa = self.decode(da, True, self.prevuser)
+                self.physwrite16(sa, val)
+            self.PS &= 0xFFF0; self.PS |= PDP11.FLAGC
+            if val == 0:
+                self.PS |= PDP11.FLAGZ
+            if val & 0x8000:
+                self.PS |= PDP11.FLAGN
+            return
+
+        # RTS
+        if (self.instr & 0o177770) == 0o000200:
+            self.R[7] = self.R[d & 7]
+            self.R[d & 7] = self.pop()
+            return
+    
+        # TODO: what are these?
+        bits = self.instr & 0o177400
+        if bits == 0o000400:
+            self.branch(o)
+            return
+        elif bits == 0o001000:
+            if not (self.PS & PDP11.FLAGZ):
+                self.branch(o)
+            return
+        elif bits == 0o001400:
+            if self.PS & PDP11.FLAGZ:
+                self.branch(o)
+            return
+        elif bits == 0o002000:
+            if not self._xor(self.PS & PDP11.FLAGN, self.PS & PDP11.FLAGV):
+                self.branch(o)
+            return
+        elif bits == 0o002400:
+            if self._xor(self.PS & PDP11.FLAGN, self.PS & PDP11.FLAGV):
+                self.branch(o)
+            return
+        elif bits == 0o003000:
+            if not self._xor(self.PS & PDP11.FLAGN, self.PS & PDP11.FLAGV) and not (self.PS & PDP11.FLAGZ):
+                self.branch(o)
+            return
+        elif bits == 0o003400:
+            if self._xor(self.PS & PDP11.FLAGN, self.PS & PDP11.FLAGV) or (self.PS & PDP11.FLAGZ):
+                self.branch(o)
+            return
+        elif bits == 0o100000:
+            if not (self.PS & PDP11.FLAGN):
+                self.branch(o)
+            return
+        elif bits == 0o100400:
+            if self.PS & PDP11.FLAGN:
+                self.branch(o)
+            return
+        elif bits == 0o101000:
+            if not (self.PS & PDP11.FLAGC) and not (self.PS & PDP11.FLAGZ):
+                self.branch(o)
+            return
+        elif bits == 0o101400:
+            if (self.PS & PDP11.FLAGC) or (self.PS & PDP11.FLAGZ):
+                self.branch(o)
+            return
+        elif bits == 0o102000:
+            if not (self.PS & PDP11.FLAGV):
+                self.branch(o)
+            return
+        elif bits == 0o102400:
+            if self.PS & PDP11.FLAGV:
+                self.branch(o)
+            return
+        elif bits == 0o103000:
+            if not (self.PS & PDP11.FLAGC):
+                self.branch(o)
+            return
+        elif bits == 0o103400:
+            if self.PS & PDP11.FLAGC:
+                self.branch(o)
+            return
+
+        # EMT TRAP IOT BPT
+        if (self.instr & 0o177000) == 0o104000 or self.instr == 3 or self.instr == 4:
+            #var vec, prev;
+            if (self.instr & 0o177400) == 0o104000:
+                vec = 0o30
+            elif (self.instr & 0o177400) == 0o104400:
+                vec = 0o34
+            elif self.instr == 3:
+                vec = 0o14
+            else:
+                vec = 0o20
+            prev = self.PS
+            self.switchmode(False)
+            self.push(prev)
+            self.push(self.R[7])
+            self.R[7] = self.memory[vec>>1]
+            self.PS = self.memory[(vec>>1)+1]
+            if self.prevuser:
+                self.PS |= (1<<13) | (1<<12)
+            return
+
+        # CL?, SE?
+        if (self.instr & 0o177740) == 0o240:
+            if self.instr & 0o20:
+                self.PS |= self.instr & 0o17
+            else:
+                self.PS &= ~(self.instr & 0o17)
+            return
+
+        # HALT / WAIT / RTI / RTT / RESET / SETD
+        bits = self.instr
+        if bits == 0o000000: # HALT
+            if not self.curuser:
+                self.writedebug("HALT\n")
+                self.printstate()
+                self.stop()
+                return
+        elif bits == 0o000001: # WAIT
+#           self.stop()
+#           setTimeout('LKS |= 0x80; interrupt(INT.CLOCK, 6); run();', 20); // FIXME, really
+            if not self.curuser:
+                self.waiting = True
+                return
+        elif bits == 0o000002 or bits == 0o000006: # RTI / RTT
+            self.R[7] = self.pop()
+            val = self.pop()
+            if self.curuser:
+                val &= 0o47
+                val |= self.PS & 0o177730
+            self.physwrite16(0o777776, val)
+            return
+        elif bits == 0o000005: # RESET
+            if self.curuser:
+                return
+            self.terminal.clear()
+            self.rk.reset()
+            return
+        elif bits == 0o170011: # SETD ; not needed by UNIX, but used; therefore ignored
+            return
+        raise(Trap(INT.INVAL, "invalid instruction: " + self.disasm(ia)))
 
 
-def
-stop()
-	document.getElementById("ips").innerHTML = '';
-	clearInterval(tim1);
-	clearInterval(tim2);
-	tim1 = tim2 = undefined;
+    def run(self):
+        while self.running:
+            try:
+                self.step()
+                if len(self.interrupts)>0 and self.interrupts[0].pri >= ((self.PS >> 5) & 7):
+                    self.handleinterrupt(self.interrupts[0].vec)
+                    self.interrupts.pop(0)
 
+                # Clock interrupt
+                self.clkcounter += 1
+                if self.clkcounter >= 40000:
+                    self.clkcounter = 0
+                    self.LKS |= (1<<7)
+                    if self.LKS & (1<<6):
+                        self.interrupt(INT.CLOCK, 6)
+
+                # Show iterations per seconds
+                if self.ips >= 1000000:
+                    now = time.time()
+                    print("IPS = %d" % int(self.ips/(now - self.lastTime)))
+                    self.ips = 0
+                    self.lastTime = now
+
+            except Exception as e:
+                if 'num' in e.__dict__:
+                    self.trapat(e.num, str(e))
+                else:
+                    raise(e)
+
+            if self.prdebug:
+                self.printstate()
+                time.sleep(1)
+
+    def stop(self):
+        self.running = False
+
+if __name__=='__main__':
+    pdp11 = PDP11()
+    pdp11.run()

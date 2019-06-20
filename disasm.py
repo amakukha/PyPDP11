@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+
+# This is a translation of Julius Schmidt's PDP-11 emulator in JavaScript.
+# You can run that one in your browser: http://pdp11.aiju.de
+# (c) 2011, Julius Schmidt, JavaScript implementation, MIT License
+# (c) 2019, Andriy Makukha, ported to Python 3, MIT License
+# Version 6 Unix (in the disk image) is available under the four-clause BSD license.
+
+DISASM_TABLE = [
+        [0o077700, 0o005000, "CLR", "D", True],
+        [0o077700, 0o005100, "COM", "D", True],
+        [0o077700, 0o005200, "INC", "D", True],
+        [0o077700, 0o005300, "DEC", "D", True],
+        [0o077700, 0o005400, "NEG", "D", True],
+        [0o077700, 0o005700, "TST", "D", True],
+        [0o077700, 0o006200, "ASR", "D", True],
+        [0o077700, 0o006300, "ASL", "D", True],
+        [0o077700, 0o006000, "ROR", "D", True],
+        [0o077700, 0o006100, "ROL", "D", True],
+        [0o177700, 0o000300, "SWAB", "D", False],
+        [0o077700, 0o005500, "ADC", "D", True],
+        [0o077700, 0o005600, "SBC", "D", True],
+        [0o177700, 0o006700, "SXT", "D", False],
+        [0o070000, 0o010000, "MOV", "SD", True],
+        [0o070000, 0o020000, "CMP", "SD", True],
+        [0o170000, 0o060000, "ADD", "SD", False],
+        [0o170000, 0o160000, "SUB", "SD", False],
+        [0o070000, 0o030000, "BIT", "SD", True],
+        [0o070000, 0o040000, "BIC", "SD", True],
+        [0o070000, 0o050000, "BIS", "SD", True],
+        [0o177000, 0o070000, "MUL", "RD", False],
+        [0o177000, 0o071000, "DIV", "RD", False],
+        [0o177000, 0o072000, "ASH", "RD", False],
+        [0o177000, 0o073000, "ASHC", "RD", False],
+        [0o177400, 0o000400, "BR", "O", False],
+        [0o177400, 0o001000, "BNE", "O", False],
+        [0o177400, 0o001400, "BEQ", "O", False],
+        [0o177400, 0o100000, "BPL", "O", False],
+        [0o177400, 0o100400, "BMI", "O", False],
+        [0o177400, 0o101000, "BHI", "O", False],
+        [0o177400, 0o101400, "BLOS", "O", False],
+        [0o177400, 0o102000, "BVC", "O", False],
+        [0o177400, 0o102400, "BVS", "O", False],
+        [0o177400, 0o103000, "BCC", "O", False],
+        [0o177400, 0o103400, "BCS", "O", False],
+        [0o177400, 0o002000, "BGE", "O", False],
+        [0o177400, 0o002400, "BLT", "O", False],
+        [0o177400, 0o003000, "BGT", "O", False],
+        [0o177400, 0o003400, "BLE", "O", False],
+        [0o177700, 0o000100, "JMP", "D", False],
+        [0o177000, 0o004000, "JSR", "RD", False],
+        [0o177770, 0o000200, "RTS", "R", False],
+        [0o177777, 0o006400, "MARK", "", False],
+        [0o177000, 0o077000, "SOB", "RO", False],
+        [0o177777, 0o000005, "RESET", "", False],
+        [0o177700, 0o006500, "MFPI", "D", False],
+        [0o177700, 0o006600, "MTPI", "D", False],
+        [0o177777, 0o000001, "WAIT", "", False],
+        [0o177777, 0o000002, "RTI", "", False],
+        [0o177777, 0o000006, "RTT", "", False],
+        [0o177400, 0o104000, "EMT", "N", False],
+        [0o177400, 0o104400, "TRAP", "N", False],
+        [0o177777, 0o000003, "BPT", "", False],
+        [0o177777, 0o000004, "IOT", "", False]
+]
+

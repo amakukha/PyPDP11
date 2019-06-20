@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 
 # This is a translation of Julius Schmidt's PDP-11 emulator in JavaScript.
-# You can run it in your browser: http://pdp11.aiju.de
+# You can run that one in your browser: http://pdp11.aiju.de
 # (c) 2011, Julius Schmidt, JavaScript implementation, MIT License
 # (c) 2019, Andriy Makukha, ported to Python 3, MIT License
 # Version 6 Unix (in the disk image) is available under the four-clause BSD license.
 
 import time, array
+from interrupt import Interrupt
+
+INT = Interrupt      # shorter name
 
 class System:
     
-    INTRK = 1
-
     def __init__(self):
         self.memory = array.array('H', bytearray(256*1024*[0]))     # 16-bit unsigned values
         print ('Memory initialized')
@@ -42,7 +43,8 @@ class RK05:
     
     def __init__(self, system):
         self.system = system
-        
+       
+        # rkinit
         self.disk = bytearray(open(RK05.IMAGE_FILENAME, 'rb').read())
         if len(self.disk) != RK05.EXPECTED_IMAGE_LENGTH:
             self.system.panic('unexpected image length {} != {}'.format(len(self.disk), RK05.EXPECTED_IMAGE_LENGTH))
@@ -70,7 +72,7 @@ class RK05:
         self.BA = 0
         self.DB = 0
 
-    def rkread16(self, a):
+    def read16(self, a):
         if a == 0o777400:
             return self.DS
         elif a ==0o0777402:
@@ -87,12 +89,12 @@ class RK05:
             self.system.panic('invalid read')
 
     def notready(self):
-        self.system.event('rkbusy')
+        #self.system.event('rkbusy')        # TODO
         self.DS &= ~(1<<6)
         self.CS &= ~(1<<7)
 
     def ready(self):
-        self.system.event('rkready')
+        #self.system.event('rkready')       # TODO
         self.DS |= 1<<6
         self.CS |= 1<<7
 
@@ -147,7 +149,7 @@ class RK05:
         else:
                 self.ready()
                 if self.CS & (1<<6):
-                     self.system.interrupt(self.system.INTRK, 5)
+                     self.system.interrupt(INT.RK, 5)
 
     def go(self):
         op = (self.CS & 0xF) >> 1

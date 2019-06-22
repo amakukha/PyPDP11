@@ -9,8 +9,6 @@
 import time, array
 from interrupt import Interrupt
 
-INT = Interrupt      # shorter name
-
 class System:
     
     def __init__(self):
@@ -149,7 +147,7 @@ class RK05:
         else:
                 self.ready()
                 if self.CS & (1<<6):
-                     self.system.interrupt(INT.RK, 5)
+                     self.system.interrupt(Interrupt.RK, 5)
 
     def go(self):
         op = (self.CS & 0xF) >> 1

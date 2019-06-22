@@ -6,7 +6,7 @@
 # (c) 2019, Andriy Makukha, ported to Python 3, MIT License
 # Version 6 Unix (in the disk image) is available under the four-clause BSD license.
 
-import time, array
+import time, array, threading
 
 from rk05 import RK05
 from cons import Terminal, ostr
@@ -72,24 +72,37 @@ class PDP11:
         #self.lastPCs = []
         self.interrupts = []
         self.lastTime = time.time()
-        self.running = True
 
         # Terminal
         self.terminal = Terminal(self)
+        self.terminal.master.title("PDP-11 emulator @ Python")
+        self.place_window(self.terminal.master)
 
         # Magnetic disk drive
         self.rk = RK05(self)
 
         self.reset()
     
+    def place_window(self, master):
+        try:
+            master.update_idletasks()
+        except:
+            return
+        sw = master.winfo_screenwidth()
+        sh = master.winfo_screenheight()
+        w, h = map(int, master.geometry().split('+')[0].split('x'))
+        x = max(int((sw-w)/3), 0)
+        y = max(int((sh-h)/2), 0)
+        master.geometry('{}x{}+{}+{}'.format(w, h, x, y))
+
     def reset(self):
         self.R = [0, 0, 0, 0, 0, 0, 0, 0]       # registers
-        self.KSP = 0        # kernel stack pointer
-        self.USP = 0        # user stack pointer
+        self.KSP = 0        # kernel mode stack pointer
+        self.USP = 0        # user mode stack pointer
         self.PS = 0         # processor status
         self.curPC = 0      # address of current instruction
         self.instr = 0      # current instruction
-        self.memory = array.array('H', bytearray(256*1024*[0]))     # 16-bit unsigned values
+        self.memory = array.array('H', bytearray(256*1024*[0]))     # 128K of 16-bit unsigned values
         self.ips = 0
         self.SR0 = 0
         self.curuser = False
@@ -1142,7 +1155,7 @@ class PDP11:
 
 
     def run(self):
-        while self.running:
+        while not self.cpu_stop.is_set():
             try:
                 self.step()
                 if len(self.interrupts)>0 and self.interrupts[0].pri >= ((self.PS >> 5) & 7):
@@ -1160,7 +1173,7 @@ class PDP11:
                 # Show iterations per seconds
                 if self.ips >= 1000000:
                     now = time.time()
-                    print("IPS = %d" % int(self.ips/(now - self.lastTime)))
+                    self.terminal.show_ips(int(self.ips/(now - self.lastTime)))
                     self.ips = 0
                     self.lastTime = now
 
@@ -1174,9 +1187,20 @@ class PDP11:
                 self.printstate()
                 time.sleep(1)
 
-    def stop(self):
-        self.running = False
+        print('- CPU stopped')
+
+    def start_cpu(self):
+        self.cpu_stop = threading.Event()
+
+        self.cpu_thread = threading.Thread(target=self.run)
+        self.cpu_thread.daemon = True
+        self.cpu_thread.start()
+
+    def stop_cpu(self):
+        print('Stopping CPU...')
+        self.cpu_stop.set()
 
 if __name__=='__main__':
     pdp11 = PDP11()
-    pdp11.run()
+    pdp11.start_cpu()
+    pdp11.terminal.mainloop()

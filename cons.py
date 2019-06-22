@@ -9,27 +9,96 @@
 import time
 from threading import Timer
 from interrupt import Interrupt
+import tkinter as tk
+import tkinter.scrolledtext as scrolledtext
 
 def ostr(d, n=6):
     return '{{:0{}o}}'.format(n).format(d)
 
-class Terminal:
+EAST_WEST = tk.E + tk.W
+NORTH_SOUTH = tk.N + tk.S
+ALL_SIDES = EAST_WEST + NORTH_SOUTH
+
+class ReadOnlyText(scrolledtext.ScrolledText):
+    MAX_LINES = 10000
+    def __init__(self, master, *args, **kargs):
+        super().__init__(*args, **kargs)
+        self.master = master
+        self.config(state=tk.DISABLED)
+    def println(self, text):
+        self.print(text + '\n')
+    def print(self, text):
+        #print("print = ", repr(text))
+        if text == '\r': return
+        self.config(state=tk.NORMAL)
+        lines = float(self.index(tk.END))
+        if lines >= self.MAX_LINES:
+            self.delete(1.0, lines - self.MAX_LINES)
+        self.insert(tk.END, text)
+        self.config(state=tk.DISABLED)
+        self.see(tk.END)
+    def clear(self):
+        self.config(state=tk.NORMAL)
+        lines = float(self.index(tk.END))
+        self.delete(1.0, lines)
+        self.config(state=tk.DISABLED)
+        self.see(tk.END)
+        
+
+class Terminal(tk.Frame):
     def __init__(self, system):
+        if tk.TclVersion < 8.6:
+            print('WARNING: your Tcl version %s is too old', tkinter.TclVersion)
+        super(Terminal, self).__init__(None)
+
         self.TKS = 0
         self.TPS = 0
         self.keybuf = 0
         self.system = system
+        self.first = ''
 
-        self.file = open('terminal.txt', 'w')
+        self.grid()
+        self.createWidgets()
+
+    def createWidgets(self):
+        # Center frame 
+        self.center = tk.Frame(self, bd=2, relief=tk.SUNKEN)
+        self.center.grid(row=0, sticky=EAST_WEST)
+        self.center.grid_rowconfigure(0, weight=1)
+        self.center.grid_columnconfigure(0, weight=1)
+
+        self.console = ReadOnlyText(self.master, self.center, height = 25, width = 89, fg='#04fe7c',
+                                    bg='#292929', font = ('Courier New', 15))
+        self.console.println("Type \"unix\" command to start Unix V6")
+        self.console.grid(row=0, column=0, sticky=ALL_SIDES)
+        self.console.bind('<Key>', self.keypress)
+        self.console.focus_set()
+
+        self.ips_label = tk.Label(self, text='')
+        self.ips_label.grid(row=1)
     
+    def keypress(self, event):
+        ch = event.char
+        if len(ch)==1 and ord(ch)<256:
+            print("pressed", repr(ch))
+            if ch == '\r': ch = '\n'
+            if self.first != None:
+                if ch == '\n' and self.first != 'unix':
+                    self.console.println("")
+                    self.console.println("hint: type \"unix\" command to run Unix V6")
+                    self.first = None
+                else:
+                    self.first += ch
+            self._addchar(ord(event.char))
+
     def clear(self):        # terminal
         # Clear terminal screen
         #var len = document.getElementById("terminal").firstChild.nodeValue.length;
         #document.getElementById("terminal").firstChild.deleteData(0, len);
-        # TODO
+        self.console.clear()
+
         self.TKS = 0
         self.TPS = 1<<7
-        self.first = True
         self.T = None
 
     def write(self, msg):   # terminal
@@ -37,33 +106,14 @@ class Terminal:
         #var ta = document.getElementById("terminal");
         #ta.firstChild.appendData(msg);
         #ta.scrollTop = ta.scrollHeight;
-        # TODO
-        self.file.write(msg)
-        self.file.flush()
-        if self.first:
-            print('Starting UNIX')
-            self.T = Timer(1, self._unix)
-            self.T.start()
-            self.first = False
+        self.console.print(msg)
 
     def _addchar(self, c):
-        # TODO: onkeypress="addchar(event.which)"
         print ('ADDCHAR = %d' % c)
         self.TKS |= 0x80
-        self.keybuf = c             # TODO: allow bigger buffer
+        self.keybuf = c             # TODO: allow bigger buffer?
         if self.TKS & (1<<6):
             self.system.interrupt(Interrupt.TTYIN, 4)       # TODO: thread safety
-
-    def _unix(self):
-        self._addchar(ord('u'))
-        time.sleep(1)
-        self._addchar(ord('n'))
-        time.sleep(1)
-        self._addchar(ord('i'))
-        time.sleep(1)
-        self._addchar(ord('x'))
-        time.sleep(1)
-        self._addchar(ord('\r'))
 
     def _specialchar(self, c):
         # TODO: onkeyup="specialchar(event.which)"
@@ -71,7 +121,7 @@ class Terminal:
             self.keybuf = 4
         elif c == 19:   # 0x13
             self.keybuf = 0o34
-        elif c == 46:   # '.'
+        elif c == 46:   # '.'  // EOF?
             self.keybuf = 127
         else:
             return
@@ -108,10 +158,11 @@ class Terminal:
             else:
                 self.TPS &= ~(1<<6)
         elif a == 0o777566:
-            v &= 0xFF
+            v &= 0xFF       # TODO: why does it send '0x8D' sometimes?
+            #print('v = ', hex(v))
             if not (self.TPS & 0x80):
                 return
-            if v == 13:     # TODO: why ignored?
+            if v == 13:     # ignoring '\r'
                 return
             else: 
                 self.write(chr(v & 0x7F))
@@ -135,4 +186,6 @@ class Terminal:
         self.TPS |= 0x80
         self.system.interrupt(Interrupt.TTYOUT, 4)
 
+    def show_ips(self, ips):
+        self.ips_label.config(text='MIPS = {:.2f}'.format(ips/1000000))
     

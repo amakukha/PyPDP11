@@ -10,6 +10,8 @@ import time
 from threading import Timer
 from interrupt import Interrupt
 import tkinter as tk
+import tkinter.ttk as ttk
+import tkinter.font as tkfont
 import tkinter.scrolledtext as scrolledtext
 
 def ostr(d, n=6):
@@ -45,7 +47,7 @@ class ReadOnlyText(scrolledtext.ScrolledText):
         self.see(tk.END)
         
 
-class Terminal(tk.Frame):
+class Terminal(ttk.Frame):
     def __init__(self, system):
         if tk.TclVersion < 8.6:
             print('WARNING: your Tcl version %s is too old', tkinter.TclVersion)
@@ -61,21 +63,28 @@ class Terminal(tk.Frame):
         self.createWidgets()
 
     def createWidgets(self):
+        font = tkfont.Font(family='Courier New', size=15)
+        style = ttk.Style()
+        style.configure('.', font=font)
+
         # Center frame 
-        self.center = tk.Frame(self, bd=2, relief=tk.SUNKEN)
+        #self.center = tk.Frame(self, bd=2, relief=tk.SUNKEN)
+        self.center = ttk.Frame(self)
         self.center.grid(row=0, sticky=EAST_WEST)
         self.center.grid_rowconfigure(0, weight=1)
         self.center.grid_columnconfigure(0, weight=1)
 
         self.console = ReadOnlyText(self.master, self.center, height = 25, width = 89, fg='#04fe7c',
                                     bg='#292929', font = ('Courier New', 15))
-        self.console.println("Type \"unix\" command to start Unix V6")
         self.console.grid(row=0, column=0, sticky=ALL_SIDES)
         self.console.bind('<Key>', self.keypress)
         self.console.focus_set()
 
-        self.ips_label = tk.Label(self, text='')
-        self.ips_label.grid(row=1)
+        self.debug = ReadOnlyText(self.master, self.center, height = 5, width = 89, font = ('Courier New', 13), relief=tk.SUNKEN)
+        self.debug.grid(row=1, column=0, sticky=ALL_SIDES)
+
+        self.ips_label = tk.Label(self, text='', font = font, relief=tk.SUNKEN, width = 11)
+        self.ips_label.grid(row=2, sticky=tk.W)
     
     def keypress(self, event):
         ch = event.char
@@ -83,13 +92,17 @@ class Terminal(tk.Frame):
             print("pressed", repr(ch))
             if ch == '\r': ch = '\n'
             if self.first != None:
-                if ch == '\n' and self.first != 'unix':
-                    self.console.println("")
-                    self.console.println("hint: type \"unix\" command to run Unix V6")
+                if ch == '\n':
+                    if self.first != 'unix':
+                        self.console.println("")
+                        self.console.println("hint: type \"unix\" command to run Unix V6")
                     self.first = None
                 else:
                     self.first += ch
             self._addchar(ord(event.char))
+
+    def cleardebug(self):
+        self.debug.clear()
 
     def clear(self):        # terminal
         # Clear terminal screen
@@ -100,6 +113,9 @@ class Terminal(tk.Frame):
         self.TKS = 0
         self.TPS = 1<<7
         self.T = None
+
+    def writedebug(self, msg):
+        self.debug.print(msg)
 
     def write(self, msg):   # terminal
         # Add text to the terminal
@@ -187,5 +203,5 @@ class Terminal(tk.Frame):
         self.system.interrupt(Interrupt.TTYOUT, 4)
 
     def show_ips(self, ips):
-        self.ips_label.config(text='MIPS = {:.2f}'.format(ips/1000000))
+        self.ips_label.config(text='MIPS ={:-5.2f}'.format(ips/1000000))
     

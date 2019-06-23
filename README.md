@@ -5,6 +5,13 @@ It runs the Version 6 Unix operating system (1975), the code of which was famous
 
 This code is a translation of [Julius Schmidt's PDP-11 emulator](http://pdp11.aiju.de) for JavaScript, which you can run in a browser.
 
+Example screenshot:
+<p align="center">
+  <img
+  src="https://github.com/amakukha/PyPDP11/raw/master/screenshots/PDP-11_emulator_for_Python_GUI_screenshot.png"
+  width="300" alt="PDP-11 emulator for Python 3. This image of Version 6 Unix still retained /usr/ken directory belonging to Ken Thompson, albeit an empty one.">
+</p>
+
 ## Prerequisites
 
  - Python 3

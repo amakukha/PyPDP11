@@ -197,7 +197,14 @@ class PDP11:
         if a % 1:
             raise(Trap(INT.BUS, "write to odd address " + ostr(a,6)))
         if a < 0o760000:
-            self.memory[a>>1] = v
+            try:
+                self.memory[a>>1] = v
+            except OverflowError as e:      # dirty fix of a problem
+                if v < 0:
+                    self.writedebug("error: negative value @ physwrite16\n")
+                    self.memory[a>>1] = v & 0xFFFF
+                else:
+                    raise e
         elif a == 0o777776:
             bits = (v >> 14) & 3
             if bits == 0:
@@ -391,14 +398,10 @@ class PDP11:
         return msg
 
     def cleardebug(self):
-        # TODO: clean debugging window; maybe use callback here
-        pass
+        self.terminal.cleardebug()
 
-    @staticmethod
-    def writedebug(msg):
-        # TODO: use for debugging window, print into stderr?; maybe use a callback here
-        print(msg, end='')
-        #print('\n'.join(['| ' + m for m in msg.split('\n')]),end='')
+    def writedebug(self, msg):
+        self.terminal.writedebug(msg)
 
     def printstate(self):
         # Display registers
@@ -427,7 +430,6 @@ class PDP11:
             self.writedebug(self.disasm(decoded) + "\n")
         except Exception:
             pass
-        self.writedebug('\n')
 
     def panic(self, msg):
         self.writedebug('PANIC: ' + msg + '\n')
@@ -436,6 +438,7 @@ class PDP11:
         raise Exception(msg)
 
     def interrupt(self, vec, pri):
+        # TODO: use Queue
         if vec & 1:
             self.panic("Thou darst calling interrupt() with an odd vector number?")
         i = 0
@@ -453,11 +456,8 @@ class PDP11:
             self.switchmode(False)
             self.push(prev)
             self.push(self.R[7])
-        except Exception as e:
-            if 'num' in e.__dict__:
-                self.trapat(e.num, str(e))
-            else:
-                raise(e)
+        except Trap as e:
+            self.trapat(e.num, str(e))
         self.R[7] = self.memory[vec>>1]
         self.PS = self.memory[(vec>>1)+1]
         if self.prevuser:
@@ -1177,11 +1177,8 @@ class PDP11:
                     self.ips = 0
                     self.lastTime = now
 
-            except Exception as e:
-                if 'num' in e.__dict__:
-                    self.trapat(e.num, str(e))
-                else:
-                    raise(e)
+            except Trap as e:
+                self.trapat(e.num, str(e))
 
             if self.prdebug:
                 self.printstate()

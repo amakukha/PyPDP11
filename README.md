@@ -9,7 +9,7 @@ Example screenshot:
 <p align="center">
   <img
   src="https://github.com/amakukha/PyPDP11/raw/master/screenshots/PDP-11_emulator_for_Python_GUI_screenshot.png"
-  width="300" alt="PDP-11 emulator for Python 3. This image of Version 6 Unix still retained /usr/ken directory belonging to Ken Thompson, albeit an empty one.">
+  width="250" alt="PDP-11 emulator for Python 3. This image of Version 6 Unix still retained /usr/ken directory belonging to Ken Thompson, albeit an empty one.">
 </p>
 
 ## Prerequisites

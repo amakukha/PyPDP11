@@ -129,21 +129,21 @@ class Terminal(ttk.Frame):
         self.TKS |= 0x80
         self.keybuf = c             # TODO: allow bigger buffer?
         if self.TKS & (1<<6):
-            self.system.interrupt(Interrupt.TTYIN, 4)       # TODO: thread safety
-
-    def _specialchar(self, c):
-        # TODO: onkeyup="specialchar(event.which)"
-        if c == 42:     # '*'
-            self.keybuf = 4
-        elif c == 19:   # 0x13
-            self.keybuf = 0o34
-        elif c == 46:   # '.'  // EOF?
-            self.keybuf = 127
-        else:
-            return
-        self.TKS |= 0x80
-        if self.TKS & (1<<6):
             self.system.interrupt(Interrupt.TTYIN, 4)
+
+#    def _specialchar(self, c):
+#        # TODO: onkeyup="specialchar(event.which)"
+#        if c == 42:     # '*'
+#            self.keybuf = 4
+#        elif c == 19:   # 0x13
+#            self.keybuf = 0o34
+#        elif c == 46:   # '.'  // EOF?
+#            self.keybuf = 127
+#        else:
+#            return
+#        self.TKS |= 0x80
+#        if self.TKS & (1<<6):
+#            self.system.interrupt(Interrupt.TTYIN, 4)
 
     def _getchar(self):
         if self.TKS & 0x80:

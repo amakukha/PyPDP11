@@ -6,7 +6,7 @@
 # (c) 2019, Andriy Makukha, ported to Python 3, MIT License
 # Version 6 Unix (in the disk image) is available under the four-clause BSD license.
 
-import time, array, threading
+import time, array, threading, queue
 
 from rk05 import RK05
 from cons import Terminal, ostr
@@ -69,8 +69,8 @@ class PDP11:
         # TODO: why are these not in reset()
         self.prdebug = False
         self.SR2 = 0
-        #self.lastPCs = []
-        self.interrupts = []
+        self.interrupts = queue.PriorityQueue()
+        self.last_interrupt_priority = INT.MAX_PRIORITY
         self.lastTime = time.time()
 
         # Terminal
@@ -201,7 +201,7 @@ class PDP11:
                 self.memory[a>>1] = v
             except OverflowError as e:      # dirty fix of a problem
                 if v < 0:
-                    self.writedebug("error: negative value @ physwrite16\n")
+                    self.writedebug("warning: negative value @ physwrite16\n")
                     self.memory[a>>1] = v & 0xFFFF
                 else:
                     raise e
@@ -438,17 +438,9 @@ class PDP11:
         raise Exception(msg)
 
     def interrupt(self, vec, pri):
-        # TODO: use Queue
         if vec & 1:
             self.panic("Thou darst calling interrupt() with an odd vector number?")
-        i = 0
-        while i<len(self.interrupts) and self.interrupts[i].pri >= pri:
-            i += 1
-        while i<len(self.interrupts) and self.interrupts[i].vec < vec:
-            i += 1
-        #print("INTERRUPT: vec = {:d} / pri = {:d}".format(vec, pri))
-        self.interrupts.insert(i, Interrupt(vec, pri))
-
+        self.interrupts.put(Interrupt(vec, pri))
 
     def handleinterrupt(self, vec):
         try:
@@ -556,7 +548,6 @@ class PDP11:
         self.curPC = self.R[7]
         ia = self.decode(self.R[7], False, self.curuser)            # instruction address
         self.R[7] += 2
-        #self.lastPCs = [ia] + self.lastPCs[0:100]                  # TODO: remove, not used
         self.instr = self.physread16(ia)
         d = self.instr & 0o77
         s = (self.instr & 0o7700) >> 6
@@ -1158,9 +1149,20 @@ class PDP11:
         while not self.cpu_stop.is_set():
             try:
                 self.step()
-                if len(self.interrupts)>0 and self.interrupts[0].pri >= ((self.PS >> 5) & 7):
-                    self.handleinterrupt(self.interrupts[0].vec)
-                    self.interrupts.pop(0)
+
+                # Handle interrupts
+                if not self.interrupts.empty():
+                    priority_level = ((self.PS >> 5) & 7)
+                    if self.last_interrupt_priority > priority_level:
+                        inter = self.interrupts.get()
+                        # this is fixed according to Wikipedia description from >= to >
+                        if inter.pri > priority_level:
+                            self.handleinterrupt(inter.vec)
+                            self.last_interrupt_priority = INT.MAX_PRIORITY
+                        else:
+                            # remember this "unprocessed" interrupt's priority for minor optimization
+                            self.last_interrupt_priority = inter.pri
+                            self.interrupts.put(inter)
 
                 # Clock interrupt
                 self.clkcounter += 1

@@ -6,7 +6,16 @@
 # (c) 2019, Andriy Makukha, ported to Python 3, MIT License
 # Version 6 Unix (in the disk image) is available under the four-clause BSD license.
 
+#from dataclasses import dataclass
+#
+#@dataclass(order=True)
+#class Interrupt:
+#    pri: int
+#    nvec: int
+
 class Interrupt:
+
+    MAX_PRIORITY = 7
 
     # Traps
     BUS     = 0o004
@@ -22,5 +31,13 @@ class Interrupt:
     def __init__(self, vec, pri):
         self.vec = vec
         self.pri = pri
+
+    def __lt__(self, other):
+        '''Higher priority interrupts must go to the beginning of PriorityQueue'''
+        if self.pri > other.pri:
+            return True
+        if self.pri == other.pri and self.vec < other.vec:
+            return True
+        return False
 
 

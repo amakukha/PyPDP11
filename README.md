@@ -3,7 +3,7 @@ PDP-11 emulator for Python 3 with GUI.
 
 It runs the Version 6 Unix operating system (1975), the code of which was famously covered by *A Commentary on the Unix Operating System* (1976) by John Lions.
 
-This project is a translation of [Julius Schmidt's PDP-11 emulator](http://pdp11.aiju.de) for JavaScript, which you can run in a browser.
+This project is based on [Julius Schmidt's PDP-11 emulator](http://pdp11.aiju.de) for JavaScript, which you can run in a browser.
 
 Example screenshot:
 <p align="center">
@@ -27,3 +27,10 @@ Example screenshot:
 Unix V6 used `chdir` command instead of `cd`.
 
 Run `stty -lcase` to enable lowercase output.
+
+## What's new
+Compared to the original JavaScript code, this implementation has resource friendly `WAIT`
+instruction and faster output.
+
+In the near future, it will also allow saving the disk state as well as importing and exporting
+files between Unix V6 and your machine.

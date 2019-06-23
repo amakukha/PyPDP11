@@ -107,7 +107,7 @@ class PDP11:
         self.SR0 = 0
         self.curuser = False
         self.prevuser = False
-        self.LKS = 1<<7     # value from reset()
+        self.LKS = 0x80     # Line Frequency Clock
         self.step_cnt = 0
 
         # from reset():
@@ -120,8 +120,8 @@ class PDP11:
         self.terminal.clear()
         self.rk.reset()
 
-        self.clkcounter = 0
-        self.waiting = False
+        self.running = threading.Event()
+        self.running.set()
 
 
     @staticmethod
@@ -441,6 +441,18 @@ class PDP11:
         if vec & 1:
             self.panic("Thou darst calling interrupt() with an odd vector number?")
         self.interrupts.put(Interrupt(vec, pri))
+        self.running.set()
+
+    def clock(self):
+        while not self.clock_stop.is_set():           
+            time.sleep(0.02)
+
+            # Clock interrupt
+            self.LKS |= 0x80                    # bit 7: set to 1 every 20 ms
+            if self.LKS & 0x40:                 # bit 6: when set, an interrupt will occur
+                self.interrupt(INT.CLOCK, 6)
+
+        print('- clock stopped')
 
     def handleinterrupt(self, vec):
         try:
@@ -454,8 +466,6 @@ class PDP11:
         self.PS = self.memory[(vec>>1)+1]
         if self.prevuser:
             self.PS |= (1<<13) | (1<<12)
-        self.waiting = False
-
 
     def trapat(self, vec, msg):
         #var prev;
@@ -480,7 +490,7 @@ class PDP11:
         self.PS = self.memory[(vec>>1)+1]
         if self.prevuser:
             self.PS |= (1<<13) | (1<<12)
-        self.waiting = False
+        self.running.set()
 
 
     def aget(self, v, l):
@@ -543,8 +553,6 @@ class PDP11:
         #var val, val1, val2, ia, da, sa, d, s, l, r, o, max, maxp, msb;
         self.ips += 1
         self.step_cnt += 1
-        if self.waiting:
-            return
         self.curPC = self.R[7]
         ia = self.decode(self.R[7], False, self.curuser)            # instruction address
         self.R[7] += 2
@@ -1121,11 +1129,9 @@ class PDP11:
                 self.stop()
                 return
         elif bits == 0o000001: # WAIT
-#           self.stop()
-#           setTimeout('LKS |= 0x80; interrupt(INT.CLOCK, 6); run();', 20); // FIXME, really
             time.sleep(0.001)
             if not self.curuser:
-                self.waiting = True
+                self.running.clear()
                 return
         elif bits == 0o000002 or bits == 0o000006: # RTI / RTT
             self.R[7] = self.pop()
@@ -1151,6 +1157,8 @@ class PDP11:
             try:
                 self.step()
 
+                self.running.wait()
+
                 # Handle interrupts
                 if not self.interrupts.empty():
                     priority_level = ((self.PS >> 5) & 7)
@@ -1165,16 +1173,8 @@ class PDP11:
                             self.last_interrupt_priority = inter.pri
                             self.interrupts.put(inter)
 
-                # Clock interrupt
-                self.clkcounter += 1
-                if self.clkcounter >= 40000:
-                    self.clkcounter = 0
-                    self.LKS |= (1<<7)
-                    if self.LKS & (1<<6):
-                        self.interrupt(INT.CLOCK, 6)
-
                 # Show iterations per seconds
-                if self.ips >= 1000000:
+                if self.ips >= 150000:
                     now = time.time()
                     self.terminal.show_ips(int(self.ips/(now - self.lastTime)))
                     self.ips = 0
@@ -1191,13 +1191,18 @@ class PDP11:
 
     def start_cpu(self):
         self.cpu_stop = threading.Event()
-
         self.cpu_thread = threading.Thread(target=self.run)
         self.cpu_thread.daemon = True
         self.cpu_thread.start()
 
+        self.clock_stop = threading.Event()
+        self.clock_thread = threading.Thread(target=self.clock)
+        self.clock_thread.daemon = True
+        self.clock_thread.start()
+
     def stop_cpu(self):
         print('Stopping CPU...')
+        self.clock_stop.set()
         self.cpu_stop.set()
 
 if __name__=='__main__':

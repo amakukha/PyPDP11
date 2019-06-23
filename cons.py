@@ -6,8 +6,7 @@
 # (c) 2019, Andriy Makukha, ported to Python 3, MIT License
 # Version 6 Unix (in the disk image) is available under the four-clause BSD license.
 
-import time
-from threading import Timer
+import time, threading
 from interrupt import Interrupt
 import tkinter as tk
 import tkinter.ttk as ttk
@@ -22,16 +21,22 @@ NORTH_SOUTH = tk.N + tk.S
 ALL_SIDES = EAST_WEST + NORTH_SOUTH
 
 class ReadOnlyText(scrolledtext.ScrolledText):
+
     MAX_LINES = 10000
+
     def __init__(self, master, *args, **kargs):
         super().__init__(*args, **kargs)
         self.master = master
         self.config(state=tk.DISABLED)
+        self.lock = threading.Lock()        # probably not needed
+
     def println(self, text):
         self.print(text + '\n')
+
     def print(self, text):
         #print("print = ", repr(text))
         if text == '\r': return
+        self.lock.acquire()
         self.config(state=tk.NORMAL)
         lines = float(self.index(tk.END))
         if lines >= self.MAX_LINES:
@@ -39,12 +44,16 @@ class ReadOnlyText(scrolledtext.ScrolledText):
         self.insert(tk.END, text)
         self.config(state=tk.DISABLED)
         self.see(tk.END)
+        self.lock.release()
+
     def clear(self):
+        self.lock.acquire()
         self.config(state=tk.NORMAL)
         lines = float(self.index(tk.END))
         self.delete(1.0, lines)
         self.config(state=tk.DISABLED)
         self.see(tk.END)
+        self.lock.release()
         
 
 class Terminal(ttk.Frame):
@@ -89,7 +98,6 @@ class Terminal(ttk.Frame):
     def keypress(self, event):
         ch = event.char
         if len(ch)==1 and ord(ch)<256:
-            print("pressed", repr(ch))
             if ch == '\r': ch = '\n'
             if self.first != None:
                 if ch == '\n':
@@ -119,13 +127,9 @@ class Terminal(ttk.Frame):
 
     def write(self, msg):   # terminal
         # Add text to the terminal
-        #var ta = document.getElementById("terminal");
-        #ta.firstChild.appendData(msg);
-        #ta.scrollTop = ta.scrollHeight;
         self.console.print(msg)
 
     def _addchar(self, c):
-        print ('ADDCHAR = %d' % c)
         self.TKS |= 0x80
         self.keybuf = c             # TODO: allow bigger buffer?
         if self.TKS & (1<<6):
@@ -175,7 +179,6 @@ class Terminal(ttk.Frame):
                 self.TPS &= ~(1<<6)
         elif a == 0o777566:
             v &= 0xFF       # TODO: why does it send '0x8D' sometimes?
-            #print('v = ', hex(v))
             if not (self.TPS & 0x80):
                 return
             if v == 13:     # ignoring '\r'
@@ -184,23 +187,14 @@ class Terminal(ttk.Frame):
                 self.write(chr(v & 0x7F))
             self.TPS &= 0xff7f
             if self.TPS & (1<<6):
-                #setTimeout("TPS |= 0x80; interrupt(INTTTYOUT, 4);", 1);
-                T = Timer(0.001, self._tps_flag_interrupt)
-                #self._tps_flag_interrupt()
+                #//setTimeout("TPS |= 0x80; interrupt(INTTTYOUT, 4);", 1);
+                self.TPS |= 0x80
+                self.system.interrupt(Interrupt.TTYOUT, 4)
             else:
-                #setTimeout("TPS |= 0x80;", 1);
-                T = Timer(0.001, self._tps_flag)
-                #self._tps_flag()
-            T.start()
+                #//setTimeout("TPS |= 0x80;", 1);
+                self.TPS |= 0x80
         else:
             system.panic("write to invalid address " + ostr(a,6));
-
-    def _tps_flag(self):
-        self.TPS |= 0x80
-
-    def _tps_flag_interrupt(self):
-        self.TPS |= 0x80
-        self.system.interrupt(Interrupt.TTYOUT, 4)
 
     def show_ips(self, ips):
         self.ips_label.config(text='MIPS ={:-5.2f}'.format(ips/1000000))

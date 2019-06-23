@@ -1123,6 +1123,7 @@ class PDP11:
         elif bits == 0o000001: # WAIT
 #           self.stop()
 #           setTimeout('LKS |= 0x80; interrupt(INT.CLOCK, 6); run();', 20); // FIXME, really
+            time.sleep(0.001)
             if not self.curuser:
                 self.waiting = True
                 return

@@ -203,6 +203,9 @@ class PDP11:
                 if v < 0:
                     self.writedebug("warning: negative value @ physwrite16\n")
                     self.memory[a>>1] = v & 0xFFFF
+                elif v > 0xFFFF:
+                    self.writedebug("warning: short overflow @ physwrite16\n")
+                    self.memory[a>>1] = v & 0xFFFF
                 else:
                     raise e
         elif a == 0o777776:

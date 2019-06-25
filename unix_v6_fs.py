@@ -138,8 +138,7 @@ class UnixV6FileSystem:
         else:
             data = self.read_file(*args)
         s = 0
-        for i in range(len(data)):
-            c = struct.unpack('B', data[i:i+1])[0]
+        for c in data:
             s += c if c <= 0x7F else (c | 0xFF00)
             if s>0xFFFF:    # 16-bit overflow
                 s = (s+1) & 0xFFFF

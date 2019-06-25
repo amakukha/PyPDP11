@@ -15,7 +15,12 @@ Example screenshot:
 ## Prerequisites
 
  - Python 3
- - make sure Python 3 is installed with Tcl version 8.6 or later (especially if you are using MacOS)
+ 
+NOTE: make sure Python 3 is installed with Tcl version 8.6 or later (especially if you are using MacOS). Like this:
+```python3
+import tkinter
+tkinter.TcVersion
+```
 
 ## Usage
 

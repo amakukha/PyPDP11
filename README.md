@@ -33,8 +33,16 @@ Unix V6 used `chdir` command instead of `cd`.
 Run `stty -lcase` to enable lowercase output.
 
 ## What's new
-Compared to the original JavaScript code, this implementation has resource friendly `WAIT`
-instruction and faster output.
+Compared to the original JavaScript code, this implementation has the following benefits:
+ - pasting text into the terminal from clipboard is allowed (making it much more usable)
+ - resource friendlier `WAIT` instruction (not overheating the physical CPU)
+ - faster output 
 
 In the near future, it will also allow saving the disk state as well as importing and exporting
 files between Unix V6 and your machine.
+
+## Known bugs
+Help is welcome on the following issues:
+ - CPU emulator is even slower than the JavaScript counterpart
+ - characters don't always update on screen in the terminal, especially after a lengthy output from
+   the OS

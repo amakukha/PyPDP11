@@ -61,12 +61,15 @@ class Terminal(ttk.Frame):
         if tk.TclVersion < 8.6:
             print('WARNING: your Tcl version %s is too old', tkinter.TclVersion)
         super(Terminal, self).__init__(None)
+        self.keybuff_lock = threading.Lock()
 
         self.TKS = 0
         self.TPS = 0
         self.keybuf = 0
+        self.pastebuff = []
         self.system = system
         self.first = ''
+        self.first_prompt = '##'
 
         self.grid()
         self.createWidgets()
@@ -80,24 +83,65 @@ class Terminal(ttk.Frame):
         #self.center = tk.Frame(self, bd=2, relief=tk.SUNKEN)
         self.center = ttk.Frame(self)
         self.center.grid(row=0, sticky=EAST_WEST)
-        self.center.grid_rowconfigure(0, weight=1)
-        self.center.grid_columnconfigure(0, weight=1)
+        #self.center.grid_rowconfigure(0, weight=1)
+        #self.center.grid_columnconfigure(0, weight=1)
 
         self.console = ReadOnlyText(self.master, self.center, height = 25, width = 89, fg='#04fe7c',
                                     bg='#292929', font = ('Courier New', 15))
         self.console.grid(row=0, column=0, sticky=ALL_SIDES)
         self.console.bind('<Key>', self.keypress)
+        self.console.bind('<Control_L>', self.control_key)
+        self.console.bind('<Meta_L>', self.control_key)
         self.console.focus_set()
 
         self.debug = ReadOnlyText(self.master, self.center, height = 5, width = 89, font = ('Courier New', 13), relief=tk.SUNKEN)
         self.debug.grid(row=1, column=0, sticky=ALL_SIDES)
 
-        self.ips_label = tk.Label(self, text='', font = font, relief=tk.SUNKEN, width = 11)
-        self.ips_label.grid(row=2, sticky=tk.W)
+        self.bottom = ttk.Frame(self)
+        self.bottom.grid(row=2, sticky=tk.W)
+        self.ips_label = tk.Label(self.bottom, text='', font = font, relief=tk.SUNKEN, width = 11)
+        self.ips_label.grid(row=0, column=0, sticky=tk.W)
+        self.start_button = tk.Button(self.bottom, text='Start routine', command=self.start)
+        self.start_button.grid(row=0, column=1, sticky=tk.W)
+        self.paste_button = tk.Button(self.bottom, text='Paste', command=self.paste)
+        self.paste_button.grid(row=0, column=2, sticky=tk.W)
+    
+    def start(self):
+        if self.first_prompt != '# ':
+            self.paste('unix\n')
+            self.first = None       # don't show the "type unix" hint
+            self.first_prompt = ''  # track the first prompt 
+            self.debug.println("Start routine loads UNIX for you and configures terminal to allow lowercase letters.")
+        else:
+            self.paste('stty -lcase\n')
+
+    def paste(self, what=''):
+        if not what:
+            what = self.master.clipboard_get()
+        if not what:
+            self.debug.println("Clipboard is empty, nothing to paste.")
+            return
+        clipboard = [ord(c) for c in what]
+        clipboard = [c for c in clipboard if c<256]
+        if not clipboard:
+            return
+        self.keybuff_lock.acquire()
+        self._addchar(clipboard.pop(0))
+        self.pastebuff.extend(clipboard)
+        self.keybuff_lock.release()
+
+    def control_key(self, event):
+        #print('Control:',event)
+        pass
+
+    def control_up_key(self, event):
+        #print('Control Up:',event)
+        pass
     
     def keypress(self, event):
         ch = event.char
         if len(ch)==1 and ord(ch)<256:
+            #print('Key:', event)
             if ch == '\r': ch = '\n'
             if self.first != None:
                 if ch == '\n':
@@ -107,7 +151,9 @@ class Terminal(ttk.Frame):
                     self.first = None
                 else:
                     self.first += ch
+            self.keybuff_lock.acquire()
             self._addchar(ord(event.char))
+            self.keybuff_lock.release()
 
     def cleardebug(self):
         self.debug.clear()
@@ -128,10 +174,16 @@ class Terminal(ttk.Frame):
     def write(self, msg):   # terminal
         # Add text to the terminal
         self.console.print(msg)
+        if len(self.first_prompt)<2:
+            if not self.first_prompt and msg == '#':
+                self.first_prompt += msg
+            elif self.first_prompt=='#' and msg == ' ':
+                self.first_prompt += msg
+                self.paste('stty -lcase\n')
 
     def _addchar(self, c):
         self.TKS |= 0x80
-        self.keybuf = c             # TODO: allow bigger buffer?
+        self.keybuf = c
         if self.TKS & (1<<6):
             self.system.interrupt(Interrupt.TTYIN, 4)
 
@@ -150,10 +202,15 @@ class Terminal(ttk.Frame):
 #            self.system.interrupt(Interrupt.TTYIN, 4)
 
     def _getchar(self):
+        c = 0
+        self.keybuff_lock.acquire()
         if self.TKS & 0x80:
             self.TKS &= 0xff7e
-            return self.keybuf
-        return 0
+            c = self.keybuf
+            if self.pastebuff:
+                self._addchar(self.pastebuff.pop(0))
+        self.keybuff_lock.release()
+        return c
 
     def consread16(self, a):
         if a == 0o777560:

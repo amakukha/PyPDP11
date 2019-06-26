@@ -41,8 +41,16 @@ Compared to the original JavaScript code, this implementation has the following 
 In the near future, it will also allow saving the disk state as well as importing and exporting
 files between Unix V6 and your machine.
 
-## Known bugs
+## Known issues
 Help is welcome on the following issues:
  - CPU emulator is even slower than the JavaScript counterpart
  - characters don't always update on screen in the terminal, especially after a lengthy output from
    the OS
+
+## Where are the manuals?
+The image included into this repository misses on
+[sources](https://github.com/eunuchs/unix-archive),
+[manual pages](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/man) and
+[documentation](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/doc/as).
+It is unsurprising, knowing that RK05 could only contain around 2.5 MB of data, while the Unix 
+sources alone measure beyond that capacity.

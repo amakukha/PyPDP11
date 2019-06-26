@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
-# This is a translation of Julius Schmidt's PDP-11 emulator in JavaScript.
+# This code is based on Julius Schmidt's PDP-11 emulator for JavaScript.
 # You can run that one in your browser: http://pdp11.aiju.de
-# (c) 2011, Julius Schmidt, JavaScript implementation, MIT License
+# (c) 2011, Julius Schmidt, JavaScript/HTML implementation, MIT License
 # (c) 2019, Andriy Makukha, ported to Python 3, MIT License
 # Version 6 Unix (in the disk image) is available under the four-clause BSD license.
+# This implementation has two main threads: GUI and CPU (this file). They exchange `interrupts`
+# through Python's PriorityQueue. Additional thread is added for the clock interrupt.
 
 import time, array, threading, queue
 

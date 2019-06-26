@@ -27,8 +27,8 @@ class System:
         print ('PANIC: ', msg)
 
 class RK05:
-    '''RK05 was a magnetic disk drive produces by DEC. It stored approximately 2.5 MB on a 14"
-    front-loading removable disk cartridge.'''
+    '''RK05 was a magnetic disk drive produces by DEC. It stored approximately 2.5 MB on
+    a 14 inch front-loading removable disk cartridge.'''
 
     EXPECTED_IMAGE_LENGTH = 2077696
     IMAGE_FILENAME = 'rk0.img'

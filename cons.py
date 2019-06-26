@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
-# This is a translation of Julius Schmidt's PDP-11 emulator in JavaScript.
+# This code is based on Julius Schmidt's PDP-11 emulator for JavaScript.
 # You can run that one in your browser: http://pdp11.aiju.de
-# (c) 2011, Julius Schmidt, JavaScript implementation, MIT License
+# Many new features were added to the terminal logic, particularly start routine and ability to
+# paste text from clipboard.
+# (c) 2011, Julius Schmidt, JavaScript/HTML implementation, MIT License
 # (c) 2019, Andriy Makukha, ported to Python 3, MIT License
 # Version 6 Unix (in the disk image) is available under the four-clause BSD license.
 

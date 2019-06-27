@@ -8,8 +8,11 @@ This project is based on [Julius Schmidt's PDP-11 emulator](http://pdp11.aiju.de
 Example screenshot:
 <p align="center">
   <img
-  src="https://github.com/amakukha/PyPDP11/raw/master/screenshots/PDP-11_emulator_for_Python_GUI_screenshot.png"
-  width="250" alt="PDP-11 emulator for Python 3. This image of Version 6 Unix still retained /usr/ken directory belonging to Ken Thompson, albeit an empty one.">
+  src="https://github.com/amakukha/PyPDP11/raw/master/screenshots/Ken_Thompson_chess_1975_Unix_V5_PDP-11_emulator_for_Python_screenshot.png"
+  width="250" alt="PDP-11 emulator for Python 3. Playing with Ken Thompson's chess implementation in Version 6 Unix (1975).">
+  <img
+  src="https://github.com/amakukha/PyPDP11/raw/master/screenshots/TMG_in_TMGL_Doug_McIlroy_PDP-11_emulator_for_Python_screenshot.png"
+  width="250" alt="PDP-11 emulator for Python 3. Viewing code of Doug McIlroy's TMG in TMGL for Unix V6.">
 </p>
 
 ## Prerequisites

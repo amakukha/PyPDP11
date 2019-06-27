@@ -443,6 +443,7 @@ class PDP11:
         raise Exception(msg)
 
     def interrupt(self, vec, pri):
+        # This is called by CPU, GUI and clock threads
         if vec & 1:
             self.panic("Thou darst calling interrupt() with an odd vector number?")
         self.interrupts.put(Interrupt(vec, pri))

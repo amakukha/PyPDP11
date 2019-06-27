@@ -16,21 +16,19 @@ Example screenshot:
 
  - Python 3
  
-NOTE: make sure Python 3 is installed with Tcl version 8.6 or later (especially if you are using MacOS):
+Make sure Python 3 is installed with Tcl version 8.6 or later (especially if you are using MacOS):
 ```
 python3 -c 'import tkinter; print(tkinter.TclVersion)'
 ```
 
 ## Usage
 
-  1. Run the `pdp11.py` file with Python. A console window should appear.
-  2. Type `unix` and press Enter to run the OS.
+  1. Run the file `pdp11.py` with Python.
+  2. Press button `Start routine` to run the OS.
 
 ## Note
 
-Unix V6 used `chdir` command instead of `cd`.
-
-Run `stty -lcase` to enable lowercase output.
+Unix V6 used `chdir` instead of `cd`. Issuing command `stty -lcase` is needed to enable lowercase output.
 
 ## What's new
 Compared to the original JavaScript code, this implementation has the following benefits:
@@ -42,15 +40,12 @@ In the near future, it will also allow saving the disk state as well as importin
 files between Unix V6 and your machine.
 
 ## Known issues
-Help is welcome on the following issues:
  - CPU emulator is even slower than the JavaScript counterpart
- - characters don't always update on screen in the terminal, especially after a lengthy output from
-   the OS
 
 ## Where are the manuals?
 The image included into this repository misses on
-[sources](https://github.com/eunuchs/unix-archive),
+[sources](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/source),
 [manual pages](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/man) and
-[documentation](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/doc/as).
-It is unsurprising, knowing that RK05 could only contain around 2.5 MB of data, while the Unix 
+[documentation](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/doc).
+It is unsurprising, knowing that RK05 could only contain around 2.5 MB of data, while the Unix V6
 sources alone measure beyond that capacity.

@@ -8,12 +8,14 @@
 # (c) 2019, Andriy Makukha, ported to Python 3, MIT License
 # Version 6 Unix (in the disk image) is available under the four-clause BSD license.
 
-import time, threading
+import time, threading, queue
 from interrupt import Interrupt
 import tkinter as tk
 import tkinter.ttk as ttk
 import tkinter.font as tkfont
 import tkinter.scrolledtext as scrolledtext
+
+GUI_MSPF = 50          # milliseconds per "frame"
 
 def ostr(d, n=6):
     return '{{:0{}o}}'.format(n).format(d)
@@ -64,6 +66,7 @@ class Terminal(ttk.Frame):
             print('WARNING: your Tcl version %s is too old', tkinter.TclVersion)
         super(Terminal, self).__init__(None)
         self.keybuff_lock = threading.Lock()
+        self.queue = queue.Queue()          # events to be processed by GUI
 
         self.TKS = 0
         self.TPS = 0
@@ -75,6 +78,8 @@ class Terminal(ttk.Frame):
 
         self.grid()
         self.createWidgets()
+
+        self.master.after(GUI_MSPF, self.process_queue)
 
     def createWidgets(self):
         font = tkfont.Font(family='Courier New', size=15)
@@ -158,9 +163,11 @@ class Terminal(ttk.Frame):
             self.keybuff_lock.release()
 
     def cleardebug(self):
+        # TODO: use queue
         self.debug.clear()
 
     def clear(self):        # terminal
+        # TODO: use queue
         # Clear terminal screen
         #var len = document.getElementById("terminal").firstChild.nodeValue.length;
         #document.getElementById("terminal").firstChild.deleteData(0, len);
@@ -171,11 +178,23 @@ class Terminal(ttk.Frame):
         self.T = None
 
     def writedebug(self, msg):
+        # This is called by the CPU thead
+        # TODO: use queue
         self.debug.print(msg)
 
-    def write(self, msg):   # terminal
-        # Add text to the terminal
-        self.console.print(msg)
+    def process_queue(self):
+        # This is called by the GUI thread
+        if not self.queue.empty():
+            while not self.queue.empty():
+                # Add text to the terminal
+                msg = self.queue.get()
+                self.console.print(msg)
+            self.master.update_idletasks()
+        self.master.after(GUI_MSPF, self.process_queue)
+
+    def add_to_write_queue(self, msg):   # terminal
+        # This is called by the CPU thread
+        self.queue.put(msg)
         if len(self.first_prompt)<2:
             if not self.first_prompt and msg == '#':
                 self.first_prompt += msg
@@ -184,6 +203,7 @@ class Terminal(ttk.Frame):
                 self.paste('stty -lcase\n')
 
     def _addchar(self, c):
+        # This is called by the GUI thread
         self.TKS |= 0x80
         self.keybuf = c
         if self.TKS & (1<<6):
@@ -204,6 +224,7 @@ class Terminal(ttk.Frame):
 #            self.system.interrupt(Interrupt.TTYIN, 4)
 
     def _getchar(self):
+        # This is in the CPU thread, but can modify buffers, therefore a lock is needed
         c = 0
         self.keybuff_lock.acquire()
         if self.TKS & 0x80:
@@ -215,6 +236,7 @@ class Terminal(ttk.Frame):
         return c
 
     def consread16(self, a):
+        # This is called by the CPU thread
         if a == 0o777560:
             return self.TKS
         elif a == 0o777562:
@@ -226,6 +248,7 @@ class Terminal(ttk.Frame):
         self.system.panic("read from invalid address " + ostr(a,6))
 
     def conswrite16(self, a, v):
+        # This is called by the CPU thread
         if a == 0o777560:
             if v & (1<<6):
                 self.TKS |= 1<<6
@@ -243,7 +266,7 @@ class Terminal(ttk.Frame):
             if v == 13:     # ignoring '\r'
                 return
             else: 
-                self.write(chr(v & 0x7F))
+                self.add_to_write_queue(chr(v & 0x7F))
             self.TPS &= 0xff7f
             if self.TPS & (1<<6):
                 #//setTimeout("TPS |= 0x80; interrupt(INTTTYOUT, 4);", 1);
@@ -256,5 +279,7 @@ class Terminal(ttk.Frame):
             system.panic("write to invalid address " + ostr(a,6));
 
     def show_ips(self, ips):
-        self.ips_label.config(text='MIPS ={:-5.2f}'.format(ips/1000000))
+        # This is called by the CPU thread
+        #self.queue.put(('ips', ips))       # this mechanism breaks the output for some reason TODO
+        self.ips_label.config(text='IPS ={:-4.0f}K'.format(ips/1000))
     

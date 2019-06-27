@@ -27,9 +27,7 @@ python3 -c 'import tkinter; print(tkinter.TclVersion)'
   1. Run the file `pdp11.py` with Python.
   2. Press button `Start routine` to run the OS.
 
-## Note
-
-Unix V6 used `chdir` instead of `cd`. Issuing command `stty -lcase` is needed to enable lowercase output.
+Note: Unix V6 used `chdir` instead of `cd`. Issuing command `stty -lcase` is needed to enable lowercase output.
 
 ## What's new
 Compared to the original JavaScript code, this implementation has the following benefits:
@@ -41,7 +39,7 @@ In the near future, it will also allow saving the disk state as well as importin
 files between Unix V6 and your machine.
 
 ## Where are the manuals?
-The image included into this repository misses on
+The disk image included into this repository misses on
 [sources](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/source),
 [manual pages](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/man) and
 [documentation](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/doc).

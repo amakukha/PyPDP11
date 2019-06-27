@@ -1180,6 +1180,7 @@ class PDP11:
                             self.interrupts.put(inter)
 
                 # Show iterations per seconds
+                # TODO: move into clock thread
                 if self.ips >= 150000:
                     now = time.time()
                     self.terminal.show_ips(int(self.ips/(now - self.lastTime)))

@@ -10,10 +10,14 @@ import struct, os, array, time
 SUPERBLOCK_SIZE = 415
 BLOCK_SIZE = 512
 INODE_SIZE = 32
+BIGGEST_NOT_HUGE_SIZE = BLOCK_SIZE*BLOCK_SIZE/2*8
 
 # TODO:
 # - check that all the free nodes in the chain are actually used 
 # - check that all the allocated nodes (files) belong to some parent directory
+
+class HugeFileError(ValueError):
+    pass
 
 class Superblock:
     def __init__(self, *args):
@@ -63,6 +67,7 @@ class INode:
             #self.actime = self.modtime = int(time.time())
             self.actime = self.modtime = 0xa60012ce         # 01 Jan 1980, 00:00:00
             self.flag = 0x8000 | 0x01FF         # allocated file, everything is allowed
+            self.nlinks = 1
 
     def setup(self, *args):
         # According to Unix V6 /usr/man/man5/fs.5
@@ -87,6 +92,12 @@ class INode:
 
     def set_directory(self):
         self.flag |= 0x4000
+
+    def set_large(self):
+        self.flag |= 0x1000
+
+    def clear_large(self):
+        self.flag &= 0xEFFF
         
     def is_allocated(self):
         return bool(self.flag & 0x8000)
@@ -152,9 +163,9 @@ class UnixV6FileSystem:
         node.inode = i          # remember its number for convenience
         return node
 
-    def write_i_node(self, inode, node):
+    def write_i_node(self, node):
         data = node.serialize()
-        self.f.seek(BLOCK_SIZE*2 + (inode-1)*32)
+        self.f.seek(BLOCK_SIZE*2 + (node.inode-1)*32)
         self.f.write(data)
 
     def ensure_i_node(self, x):
@@ -173,7 +184,7 @@ class UnixV6FileSystem:
 
     def read_file(self, *args):
         inode = self.ensure_i_node(args[0])
-        if inode.size > BLOCK_SIZE*BLOCK_SIZE/2*8:
+        if inode.size > BIGGEST_NOT_HUGE_SIZE:
             raise ValueError('huge files not implemented')
         contents = b''
         if not inode.is_large():
@@ -226,7 +237,7 @@ class UnixV6FileSystem:
     def find_i_node(self, path, node=1):
         if path and path[0]=='/':
             return self.find_i_node(path.strip('/'))       # root directory, we already know the inode (1)
-        print(path, node)
+        #print(path, node)
         inode = self.read_i_node(node)
         if not path:
             if inode.is_allocated():
@@ -262,12 +273,12 @@ class UnixV6FileSystem:
             if not node.is_dir() and save_path is not None:
                 filepath = os.path.join(save_path, name)
                 open(filepath, 'wb').write(contents)
-            print('{name:15s}\t{size}\t{flags}\tsum={sum}\t{time:x}'.format(
+            print('{name:15s}\t{size}\t{flags}\tsum={sum}\t{nlinks:d}'.format(
                         name = name + ('/' if node.is_dir() else ' '),
                         flags = node.flags_string(),
                         size = node.size,
                         sum = self.sum_file(contents),
-                        time = node.actime)
+                        nlinks = node.nlinks)
             )
             size += node.size
             blk_size += (node.size // 512) + (1 if node.size % 512 else 0)
@@ -309,7 +320,10 @@ class UnixV6FileSystem:
             sup.ninode -= 1
             inode = sup.inode[sup.ninode]
             self.write_superblock(sup)
-            return inode
+            # Create new node object (allocated/file)
+            node = INode()
+            node.inode = inode
+            return node
         else:
             raise Exception("no free inodes")
 
@@ -320,9 +334,9 @@ class UnixV6FileSystem:
             sup.ninode += 1
             self.write_superblock(sup)
         # "the information as to whether the inode is really free or not is maintained in the inode itself"
-        node = self.read_i_node(inode)
+        node = self.ensure_i_node(inode)
         node.set_free()
-        selr.write_i_node(inode, node)
+        selr.write_i_node(node)
 
     def allocate_block(self):
         # Returns block number
@@ -368,29 +382,27 @@ class UnixV6FileSystem:
             raise ValueError("destination parent not found")
 
         # Allocate inode & block (new directory - always one block)
-        inode = fs.allocate_i_node()
+        node = fs.allocate_i_node()
         block = fs.allocate_block()
         
         # Write block
-        data  = struct.pack('H', inode)
+        data  = struct.pack('H', node.inode)
         data += b'.' + b'\x00'*13
         data += struct.pack('H', pnode.inode)
         data += b'..' + b'\x00'*12
         self.write_block(block, data)
 
         # Write inode
-        node = INode()
-        node.inode = inode
         node.set_directory()
         node.addr[0] = block
         node.size = 32
-        self.write_i_node(inode, node)
+        self.write_i_node(node)
         print(node)
 
         # Add directory inode to parent directory
-        self.add_to_directory(pnode, inode, name)
+        self.add_to_directory(pnode, node, name)
 
-    def add_to_directory(self, dnode, inode, name):
+    def add_to_directory(self, dnode, fnode, name):
         dnode = self.ensure_i_node(dnode)
         if dnode.is_large() or dnode.size+16 >= BLOCK_SIZE*8:
             raise ValueError("writing to large directories is not supported")
@@ -404,33 +416,37 @@ class UnixV6FileSystem:
         block = self.read_block(dnode.addr[i])[:blksz]
         
         # Add record to directory blocks
-        block += struct.pack('H', inode)
+        block += struct.pack('H', fnode.inode)
         name = name[:14]
         block += name.encode() + b'\x00'*(14-len(name))
         self.write_block(dnode.addr[i], block)
 
         # Update directory size
         dnode.size += 16
-        self.write_i_node(dnode.inode, dnode)
+        self.write_i_node(dnode)
 
-    def put_file(self, src, dst):
-        finode = self.find_i_node(dst)      # inode of the file to be overwritten
-        pinode = None                       # inode of the directory to be written into
-        if finode is not None:
-            if finode.is_dir():
-                pinode = inode
-                finode = None
+    def upload_file(self, src, dst):
+        fnode = self.find_i_node(dst)      # inode of the file to be overwritten
+        pnode = None                       # inode of the directory to be written into
+        dstname = None                     # destination base filename
+        if fnode is not None:
+            if fnode.is_dir():
+                pnode = fnode
+                fnode = None
                 dirpath = dst
+                dstname = os.path.split(src)[1]
             else:
                 print('Overwriting file:', dst)
+        if dstname is None:
+            dstname = os.path.split(dst)[1]
 
         # Find parent directory 
-        if pinode is None:
+        if pnode is None:
             dirpath = os.path.split(dst)[0]
-            pinode = self.find_i_node(dirpath)
-            if pinode is None:
+            pnode = self.find_i_node(dirpath)
+            if pnode is None:
                 raise ValueError("destination directory not found")
-            elif not pinode.is_dir():
+            elif not pnode.is_dir():
                 raise ValueError("destination path incorrect")
         print('Writing into directory:', dirpath)
 
@@ -440,7 +456,64 @@ class UnixV6FileSystem:
         contents = open(src,'rb').read()
         size = len(contents)
 
-        # TODO
+        # Allocate inode if not overwriting
+        if fnode is None:
+            fnode = self._create_file(contents)
+            self.add_to_directory(pnode, fnode, dstname)
+        else:
+            self.overwrite_file(fnode, contents)
+
+    def _create_file(self, contents):
+        fnode = self.allocate_i_node()
+        try:
+            self.overwrite_file(fnode, contents)
+            print('File created:', fnode)
+            return fnode
+        except HugeFileError as e:
+            self.free_i_node(fnode)
+            raise e
+
+    def overwrite_file(self, fnode, contents):
+        if len(contents) > BIGGEST_NOT_HUGE_SIZE:
+            raise HugeFileError("creating huge files not supported")
+        fnode.size = len(contents)
+        fnode.addr = [0]*8
+        
+        # Allocate and write blocks
+        last_block = (fnode.size-1)//BLOCK_SIZE
+        if len(contents) <= BLOCK_SIZE*8:
+            # Small file
+            fnode.clear_large()
+            for i in range(last_block+1):
+                blkn = self.allocate_block()
+                fnode.addr[i] = blkn
+                if i!=last_block:
+                    self.write_block(blkn, contents[i*BLOCK_SIZE:(i+1)*BLOCK_SIZE])
+                else:
+                    self.write_block(blkn, contents[i*BLOCK_SIZE:])
+        else:
+            # Large file (but not huge)
+            fnode.set_large()
+            blkcnt = 0
+            for a in range(8):
+                ablkn = self.allocate_block()
+                ablkdata = b''
+                fnode.addr[a] = ablkn
+                for b in range(256):
+                    blkn = self.allocate_block()
+                    ablkdata += struct.pack('H', blkn)
+                    if blkcnt!=last_block:
+                        self.write_block(blkn, contents[blkcnt*BLOCK_SIZE:(blkcnt+1)*BLOCK_SIZE])
+                    else:
+                        self.write_block(blkn, contents[blkcnt*BLOCK_SIZE:])
+                        break
+                    blkcnt += 1
+                self.write_block(ablkn, ablkdata)
+                if blkcnt==last_block:
+                    break
+
+        # Write inode
+        self.write_i_node(fnode)
 
     def test(self):
         def local_print(test, res):
@@ -482,4 +555,12 @@ if __name__=='__main__':
     elif argv[1] == 'exists':
         # Command "exists" - check if file/directory exists
         print(fs.path_exists(argv[2]))
+
+    elif argv[1] == 'upload':
+        # Command 'umpoad' - copy file from local filesystem into Unix V6 filesystem
+        fs.upload_file(argv[2], argv[3])
+
+    elif argv[1] == 'sum':
+        # Command 'sum' - Unix V5 checksum local file 
+        print(fs.sum_file(open(argv[2], 'rb').read()))
 

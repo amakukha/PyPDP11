@@ -100,6 +100,8 @@ class Terminal(ttk.Frame):
         self.console.grid(row=0, column=0, sticky=ALL_SIDES)
         self.console.bind('<KeyPress>', self.key_press)
         self.console.bind('<KeyRelease>', self.key_release)
+        self.console.bind('<Button-1>', self.console_focus)
+        self.console.bind('<Double-Button-1>', self.console_focus)
         self.console.focus_set()
 
         self.debug = ReadOnlyText(self.master, self.center, height = 5, width = 89, font = ('Courier New', 13), relief=tk.SUNKEN)
@@ -116,6 +118,9 @@ class Terminal(ttk.Frame):
         self.paste_button = tk.Button(self.bottom, text='Paste', command=self.paste)
         self.paste_button.grid(row=0, column=3, sticky=tk.W)
     
+    def console_focus(self, event):
+        self.console.focus_set()
+
     def start(self):
         if self.first_prompt != '# ':
             self.paste('unix\n')
@@ -175,7 +180,7 @@ class Terminal(ttk.Frame):
                 print ('Deleted selection')
                 return
             if ch == '\x03': print('Ctrl+C')
-            if ch in 'v\x16':
+            if ch in 'v\x16' and (self.control_pressed or self.meta_pressed):
                 self.writedebug('Pasted from clipboard.\n')
                 self.paste()
                 return

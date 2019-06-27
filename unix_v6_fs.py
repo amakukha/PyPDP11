@@ -5,13 +5,49 @@
 #     https://github.com/amakukha/PyPDP11
 # Copyright (c) 2019, Andriy Makukha, MIT Licence
 
-import struct
+import struct, os, array, time
 
+SUPERBLOCK_SIZE = 415
 BLOCK_SIZE = 512
 INODE_SIZE = 32
 
+# TODO:
+# - check that all the free nodes in the chain are actually used 
+# - check that all the allocated nodes (files) belong to some parent directory
+
+class Superblock:
+    def __init__(self, *args):
+        if type(args[0])!=bytes:
+            data = args[0].read(SUPERBLOCK_SIZE)
+        else:
+            data = args[0]
+        self.parse(data)
+
+    def parse(self, data):
+        self.isize, self.fsize, self.nfree = struct.unpack('HHH', data[:6])
+        self.free = array.array('H', data[6:206])
+        self.ninode = struct.unpack('H', data[206:208])[0]
+        self.inode = array.array('H', data[208:408])
+        self.flock, self.ilock, self.fmod = struct.unpack('BBB', data[408:411])
+        self.time = struct.unpack('I', data[411:415])[0]
+
+    def serialize(self):
+        data  = struct.pack('HHH', self.isize, self.fsize, self.nfree)
+        data += self.free.tobytes()
+        data += struct.pack('H', self.ninode)
+        data += self.inode.tobytes()
+        data += struct.pack('BBB', self.flock, self.ilock, self.fmod)
+        data += struct.pack('I', self.time)
+        return data
+
+    def __repr__(self):
+        return 'Superblock(isize={isize},fsize={fsize},nfree={nfree},ninode={ninode})'.format(
+                    isize=self.isize, fsize=self.fsize, nfree=self.nfree, ninode=self.ninode
+                )
+
 class INode:
     def __init__(self, *args):
+        self.inode = 0
         if len(args)==20:
             self.setup(*args)
         elif len(args)==1:
@@ -23,7 +59,10 @@ class INode:
             params = struct.unpack('HBBBBHHHHHHHHHII', data)
             self.setup(*params)
         else:
-            raise ValueError("wrong input")
+            self.setup(*([0]*16))
+            #self.actime = self.modtime = int(time.time())
+            self.actime = self.modtime = 0xa60012ce         # 01 Jan 1980, 00:00:00
+            self.flag = 0x8000 | 0x01FF         # allocated file, everything is allowed
 
     def setup(self, *args):
         # According to Unix V6 /usr/man/man5/fs.5
@@ -32,12 +71,28 @@ class INode:
         self.uid = args[2]              # byte: user ID of owner
         self.gid = args[3]              # byte: group ID of owner
         self.size = (args[4]<<16) + args[5]   # byte + short
-        self.addr = args[6:14]          # uint16_t[8]: device addresses constituting file
+        self.addr = list(args[6:14])    # uint16_t[8]: device addresses constituting file
         self.actime = args[14]          # time of last access
         self.modtime = args[15]         # time of last modification
 
+    def serialize(self):
+        data = struct.pack('HBBBBH', self.flag, self.nlinks, self.uid, self.gid, self.size>>16, self.size & 0xFFFF)
+        for i in range(8):
+            data += struct.pack('H', self.addr[i])
+        data += struct.pack('II', self.actime, self.modtime)
+        return data
+
+    def set_free(self):                 # disallocate, mark inode as free
+        self.flag &= 0x7FFF
+
+    def set_directory(self):
+        self.flag |= 0x4000
+        
+    def is_allocated(self):
+        return bool(self.flag & 0x8000)
+
     def is_dir(self):
-        return bool(self.flag & 0x6000)
+        return bool((self.flag & 0x4000) == 0x4000)
 
     def is_large(self):
         return bool(self.flag & 0x1000)
@@ -65,32 +120,42 @@ class INode:
         s += 'X' if self.flag & 0x0001 else '.'
         return s
 
-    def decode_flags(self):
-        '''Represent some flags as a list'''
-        flags = []
-        if self.flag & 0x8000:
-            flags.append('alloc')
-        # type
-        fmt = (self.flag & 0x6000) >> 13
-        flags.append({0: 'file', 1: 'spec', 2: 'dir', 3: 'block'}[fmt])
-        if self.flag & 0x1000:
-            flags.append('large')
-        return flags
-
     def __repr__(self):
         return 'INode(uid={uid},gid={gid},addrs={addr},size={size},flags={flags})'.format(
                     uid=self.uid, gid=self.gid, addr=str(self.addr), size=self.size,
-                    flags=str(self.decode_flags()),
+                    flags=self.flags_string(),
                 )
 
 class UnixV6FileSystem:
     def __init__(self, filename):
-        self.f = open(filename, 'rb')
+        self.f = open(filename, 'r+b')
+
+    def read_superblock(self):
+        self.f.seek(BLOCK_SIZE)
+        sup = Superblock(self.f)
+        return sup
+
+    def write_block(self, blkn, data):
+        if len(data) > BLOCK_SIZE:
+            raise ValueError('data is too big to fit into one block')
+        data += b'\x00' * (BLOCK_SIZE - len(data)) 
+        self.f.seek(BLOCK_SIZE*blkn)
+        self.f.write(data)
+
+    def write_superblock(self, sup):
+        data = sup.serialize()
+        self.write_block(1, data)
 
     def read_i_node(self, i):
         self.f.seek(BLOCK_SIZE*2 + (i-1)*32)
         node = INode(self.f)
+        node.inode = i          # remember its number for convenience
         return node
+
+    def write_i_node(self, inode, node):
+        data = node.serialize()
+        self.f.seek(BLOCK_SIZE*2 + (inode-1)*32)
+        self.f.write(data)
 
     def ensure_i_node(self, x):
         if isinstance(x, INode):
@@ -101,8 +166,8 @@ class UnixV6FileSystem:
         inode = self.ensure_i_node(x)
         return inode.flags_string()
 
-    def read_block(self, b):
-        self.f.seek(BLOCK_SIZE*b)
+    def read_block(self, blkn):
+        self.f.seek(BLOCK_SIZE*blkn)
         data = self.f.read(BLOCK_SIZE)
         return data
 
@@ -158,7 +223,24 @@ class UnixV6FileSystem:
                 files.append((inum, name))
         return files
 
-    def tree(self, inum, tabs=0):
+    def find_i_node(self, path, node=1):
+        if path and path[0]=='/':
+            return self.find_i_node(path.strip('/'))       # root directory, we already know the inode (1)
+        print(path, node)
+        inode = self.read_i_node(node)
+        if not path:
+            if inode.is_allocated():
+                inode.inode = node
+                return inode
+            return None
+        if inode.is_dir(): 
+            name, tail = path.split('/', 1) if '/' in path else (path, '')
+            for no, nm in self.list_dir(inode):
+                if nm != name: continue
+                return self.find_i_node(tail, no)
+        return None
+
+    def tree(self, inum, save_path=None, tabs=0):
         '''Prints subdirectory tree to standard output.
         Shows all the files, together with flags, size and checksum.
         Call it like `fs.tree(1)` to descend into the root directory (first inode).
@@ -177,24 +259,227 @@ class UnixV6FileSystem:
             print(' '*tabs,end='')
             node = self.read_i_node(inum)
             contents = self.read_file(inum)
-            print('{name:15s}\t{size}\t{flags}\tsum={sum}'.format(
+            if not node.is_dir() and save_path is not None:
+                filepath = os.path.join(save_path, name)
+                open(filepath, 'wb').write(contents)
+            print('{name:15s}\t{size}\t{flags}\tsum={sum}\t{time:x}'.format(
                         name = name + ('/' if node.is_dir() else ' '),
                         flags = node.flags_string(),
                         size = node.size,
-                        sum = self.sum_file(contents))
+                        sum = self.sum_file(contents),
+                        time = node.actime)
             )
             size += node.size
             blk_size += (node.size // 512) + (1 if node.size % 512 else 0)
             if name not in '..' and node.is_dir():
                 # Recursion into subdirectories
-                sz, blk_sz = self.tree(inum, tabs + 4)
+                if save_path is None:
+                    sz, blk_sz = self.tree(inum, None, tabs + 4)
+                else:
+                    dirpath = os.path.join(save_path, name)
+                    os.mkdir(dirpath)
+                    sz, blk_sz = self.tree(inum, dirpath, tabs + 4)
                 size += sz
                 blk_size += blk_sz
             last_inum, last_name = inum, name
         return size, blk_size
 
+    def extract(self, dirname):
+        '''Create a directory and extract all the files from the disk image'''
+        if os.path.exists(dirname):
+            raise ValueError("folder exists")
+        os.mkdir(dirname)
+        return self.tree(1, dirname)
+
+    def path_exists(self, path):
+        return self.find_i_node(path) is not None
+
+    def allocate_i_node(self):
+        '''This function return the number of inode'''
+        sup = self.read_superblock()
+        if sup.ninode <= 0:
+            sup.ninode = 0
+            # Find free inodes
+            for i in range(1, sup.isize*BLOCK_SIZE//INODE_SIZE+1):
+                node = self.read_i_node(i)
+                if not node.is_allocated():
+                    sup.inode[sup.ninode] = i
+                    sup.ninode += 1
+        if sup.ninode > 0:
+            sup.ninode -= 1
+            inode = sup.inode[sup.ninode]
+            self.write_superblock(sup)
+            return inode
+        else:
+            raise Exception("no free inodes")
+
+    def free_i_node(self, inode):
+        sup = self.read_superblock()
+        if sup.ninode<100:
+            sup.inode[sup.ninode] = inode
+            sup.ninode += 1
+            self.write_superblock(sup)
+        # "the information as to whether the inode is really free or not is maintained in the inode itself"
+        node = self.read_i_node(inode)
+        node.set_free()
+        selr.write_i_node(inode, node)
+
+    def allocate_block(self):
+        # Returns block number
+        sup = self.read_superblock()
+        sup.nfree -= 1
+        blkn = sup.free[sup.nfree]
+        if sup.nfree>0:
+            self.write_superblock(sup)
+            if blkn == 0:
+                raise ValueError('allocated free block number is zero')
+            return blkn
+        # Retrieve block from the chain
+        blk = self.read_block(blkn)
+        sup.nfree = struct.unpack('H', blk[:2])[0]
+        for i in range(100):
+            sup.free[i] = struct.unpack('H', blk[2+2*i:4+2*i])[0]
+        self.write_superblock(sup)
+        return blkn
+
+    def free_block(self, blkn):
+        sup = self.read_superblock()
+        if sup.nfree >= 100:
+            data = struct.pack('H', sup.nfree)
+            for i in range(100):
+                data += struct.pack('H', sup.free[i])
+            self.write_block(blkn, data)
+            sup.nfree = 0
+        sup.free[sup.nfree] = blkn
+        sup.nfree += 1
+        self.write_superblock(sup)
+            
+
+    def mkdir(self, dst):
+        # Check correctness
+        node = self.find_i_node(dst)
+        if node:
+            raise ValueError("destination exists")
+        # Find parent directory
+        dirpath, name = os.path.split(dst)
+        print ('DIRPATH:',dirpath)
+        pnode = self.find_i_node(dirpath)
+        if not pnode:
+            raise ValueError("destination parent not found")
+
+        # Allocate inode & block (new directory - always one block)
+        inode = fs.allocate_i_node()
+        block = fs.allocate_block()
+        
+        # Write block
+        data  = struct.pack('H', inode)
+        data += b'.' + b'\x00'*13
+        data += struct.pack('H', pnode.inode)
+        data += b'..' + b'\x00'*12
+        self.write_block(block, data)
+
+        # Write inode
+        node = INode()
+        node.inode = inode
+        node.set_directory()
+        node.addr[0] = block
+        node.size = 32
+        self.write_i_node(inode, node)
+        print(node)
+
+        # Add directory inode to parent directory
+        self.add_to_directory(pnode, inode, name)
+
+    def add_to_directory(self, dnode, inode, name):
+        dnode = self.ensure_i_node(dnode)
+        if dnode.is_large() or dnode.size+16 >= BLOCK_SIZE*8:
+            raise ValueError("writing to large directories is not supported")
+
+        # Read last/new block
+        i = dnode.size // BLOCK_SIZE
+        if dnode.size % BLOCK_SIZE == 0:
+            # Previous directory blocks are full, allocate new one
+            dnode.addr[i] = self.allocate_block()
+        blksz = dnode.size - BLOCK_SIZE*i
+        block = self.read_block(dnode.addr[i])[:blksz]
+        
+        # Add record to directory blocks
+        block += struct.pack('H', inode)
+        name = name[:14]
+        block += name.encode() + b'\x00'*(14-len(name))
+        self.write_block(dnode.addr[i], block)
+
+        # Update directory size
+        dnode.size += 16
+        self.write_i_node(dnode.inode, dnode)
+
+    def put_file(self, src, dst):
+        finode = self.find_i_node(dst)      # inode of the file to be overwritten
+        pinode = None                       # inode of the directory to be written into
+        if finode is not None:
+            if finode.is_dir():
+                pinode = inode
+                finode = None
+                dirpath = dst
+            else:
+                print('Overwriting file:', dst)
+
+        # Find parent directory 
+        if pinode is None:
+            dirpath = os.path.split(dst)[0]
+            pinode = self.find_i_node(dirpath)
+            if pinode is None:
+                raise ValueError("destination directory not found")
+            elif not pinode.is_dir():
+                raise ValueError("destination path incorrect")
+        print('Writing into directory:', dirpath)
+
+        # Retrieve file from the local filesystem
+        if not os.path.exists(src):
+            raise ValueError("file {} doesn't exist".format(src))
+        contents = open(src,'rb').read()
+        size = len(contents)
+
+        # TODO
+
+    def test(self):
+        def local_print(test, res):
+            print('{:>30}: {}'.format(test, 'OK' if res else 'FAILED'))
+
+        # Test 1
+        supdata0 = self.read_block(1)
+        sup = self.read_superblock()
+        local_print('SUPERBLOCK SERIALIZATION', supdata0[:SUPERBLOCK_SIZE] == sup.serialize()) 
+
+        # Test 2
+        blkn = self.allocate_block()
+        self.free_block(blkn)
+        sup = self.read_superblock()
+        local_print('ALLOCATE/FREE BLOCK', supdata0 == self.read_block(1)) 
+
+        # Test 3
+        found = self.path_exists('/usr/sys/dmr/hp.c')
+        local_print('FOUND PATH', found)
+
 if __name__=='__main__':
     fs = UnixV6FileSystem('rk0.img')
-    size, blk_size = fs.tree(1)     # prints entire filesystem tree
-    print('Total size: %d, Block size: %d (%d)' % (size, blk_size*BLOCK_SIZE, blk_size))
-    #print(fs.sum_file(bytes(('1111111111\n'*320).encode())))       # should return 28930 (same as SYSV checksum for text files)
+    fs.test()
+
+    from sys import argv
+    if argv[1] in ['tree', 'extract']:
+        if argv[1] == 'tree':
+            # Command "tree" prints entire filesystem tree
+            size, blk_size = fs.tree(1)
+        else:
+            # Command "extract" - extracts all the files into new directory
+            size, blk_size = fs.extract(argv[2])   
+        print('Total size: %d, Block size: %d (%d)' % (size, blk_size*BLOCK_SIZE, blk_size))
+    
+    elif argv[1] == 'mkdir':
+        # Command "mkdir" - make new directory
+        fs.mkdir(argv[2])
+
+    elif argv[1] == 'exists':
+        # Command "exists" - check if file/directory exists
+        print(fs.path_exists(argv[2]))
+

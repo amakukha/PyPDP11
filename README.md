@@ -16,7 +16,8 @@ Example screenshot:
 
  - Python 3
  
-Make sure Python 3 is installed with Tcl version 8.6 or later (especially if you are using MacOS):
+Make sure Python 3 is installed with Tcl version 8.6 or later (especially if you are using MacOS).
+To check:
 ```
 python3 -c 'import tkinter; print(tkinter.TclVersion)'
 ```
@@ -38,9 +39,6 @@ Compared to the original JavaScript code, this implementation has the following 
 
 In the near future, it will also allow saving the disk state as well as importing and exporting
 files between Unix V6 and your machine.
-
-## Known issues
- - CPU emulator is even slower than the JavaScript counterpart
 
 ## Where are the manuals?
 The image included into this repository misses on

@@ -67,6 +67,8 @@ class Terminal(ttk.Frame):
         super(Terminal, self).__init__(None)
         self.keybuff_lock = threading.Lock()
         self.queue = queue.Queue()          # events to be processed by GUI
+        self.meta_pressed = False
+        self.control_pressed = False
 
         self.TKS = 0
         self.TPS = 0
@@ -96,9 +98,8 @@ class Terminal(ttk.Frame):
         self.console = ReadOnlyText(self.master, self.center, height = 25, width = 89, fg='#04fe7c',
                                     bg='#292929', font = ('Courier New', 15))
         self.console.grid(row=0, column=0, sticky=ALL_SIDES)
-        self.console.bind('<Key>', self.keypress)
-        self.console.bind('<Control_L>', self.control_key)
-        self.console.bind('<Meta_L>', self.control_key)
+        self.console.bind('<KeyPress>', self.key_press)
+        self.console.bind('<KeyRelease>', self.key_release)
         self.console.focus_set()
 
         self.debug = ReadOnlyText(self.master, self.center, height = 5, width = 89, font = ('Courier New', 13), relief=tk.SUNKEN)
@@ -106,12 +107,14 @@ class Terminal(ttk.Frame):
 
         self.bottom = ttk.Frame(self)
         self.bottom.grid(row=2, sticky=tk.W)
-        self.ips_label = tk.Label(self.bottom, text='', font = font, relief=tk.SUNKEN, width = 11)
+        self.ips_label = tk.Label(self.bottom, text='', font=font, relief=tk.SUNKEN, width = 11)
         self.ips_label.grid(row=0, column=0, sticky=tk.W)
+        self.ctrl_label = tk.Label(self.bottom, text='ctrl', font=font, relief=tk.SUNKEN, width=5)
+        self.ctrl_label.grid(row=0, column=1, sticky=tk.W)
         self.start_button = tk.Button(self.bottom, text='Start routine', command=self.start)
-        self.start_button.grid(row=0, column=1, sticky=tk.W)
+        self.start_button.grid(row=0, column=2, sticky=tk.W)
         self.paste_button = tk.Button(self.bottom, text='Paste', command=self.paste)
-        self.paste_button.grid(row=0, column=2, sticky=tk.W)
+        self.paste_button.grid(row=0, column=3, sticky=tk.W)
     
     def start(self):
         if self.first_prompt != '# ':
@@ -137,19 +140,49 @@ class Terminal(ttk.Frame):
         self.pastebuff.extend(clipboard)
         self.keybuff_lock.release()
 
-    def control_key(self, event):
-        #print('Control:',event)
-        pass
+    def update_ctrl(self):
+        self.ctrl_label.config(text={
+            (False,False): 'ctrl',
+            (True, False): 'CTRL',
+            (False, True): 'COMM',
+            (True,  True): 'CT+CO',
+        }[(self.control_pressed, self.meta_pressed)])
 
-    def control_up_key(self, event):
-        #print('Control Up:',event)
-        pass
+    def key_release(self, event):
+        if event.keysym in ['Meta_L', 'Control_L']:
+            if event.keysym == 'Meta_L':
+                self.meta_pressed = False
+            elif event.keysym == 'Control_L':
+                self.control_pressed = False
+            self.update_ctrl()
     
-    def keypress(self, event):
+    def key_press(self, event):
+        if event.keysym in ['Meta_L', 'Control_L']:
+            if event.keysym == 'Meta_L':
+                self.meta_pressed = True
+            elif event.keysym == 'Control_L':
+                self.control_pressed = True
+            self.update_ctrl()
         ch = event.char
         if len(ch)==1 and ord(ch)<256:
-            #print('Key:', event)
-            if ch == '\r': ch = '\n'
+            # Handle the Ctrl+C / Ctrl+V properly
+            if ch in 'c\x03' and (self.control_pressed or self.meta_pressed) and self.console.tag_ranges(tk.SEL):
+                selection = self.console.selection_get()
+                self.master.clipboard_clear()
+                self.master.clipboard_append(selection)
+                self.writedebug('Selection copied to clipboard.\n')
+                self.console.tag_remove(tk.SEL, "1.0", tk.END)
+                print ('Deleted selection')
+                return
+            if ch == '\x03': print('Ctrl+C')
+            if ch in 'v\x16':
+                self.writedebug('Pasted from clipboard.\n')
+                self.paste()
+                return
+            if ch == '\x03': print('Ctrl+V')
+
+            # Process input to show the hint
+            if ch == '\r': ch = '\n' # Will it work on Windows?
             if self.first != None:
                 if ch == '\n':
                     if self.first != 'unix':
@@ -158,6 +191,8 @@ class Terminal(ttk.Frame):
                     self.first = None
                 else:
                     self.first += ch
+
+            #  Pass the character to the OS
             self.keybuff_lock.acquire()
             self._addchar(ord(event.char))
             self.keybuff_lock.release()
@@ -181,6 +216,7 @@ class Terminal(ttk.Frame):
         # This is called by the CPU thead
         # TODO: use queue
         self.debug.print(msg)
+        self.master.update_idletasks()
 
     def process_queue(self):
         # This is called by the GUI thread

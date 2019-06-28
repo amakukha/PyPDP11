@@ -18,7 +18,6 @@ BIGGEST_NOT_HUGE_SIZE = BLOCK_SIZE*BLOCK_SIZE/2*8
 # TODO:
 # - check that all the non-free nodes (according to the chain) are actually used 
 # - check that all the allocated nodes (files) belong to some parent directory
-# - calculate number of free blocks (command "free")
 
 class HugeFileError(ValueError):
     pass
@@ -32,6 +31,7 @@ class Superblock:
         self.parse(data)
 
     def parse(self, data):
+        # According to Unix V6 /usr/man/man5/fs.5
         self.isize, self.fsize, self.nfree = struct.unpack('HHH', data[:6])
         self.free = array.array('H', data[6:206])
         self.ninode = struct.unpack('H', data[206:208])[0]
@@ -188,7 +188,7 @@ class UnixV6FileSystem:
         return data
 
     def yield_node_blocks(self, node):
-        node = self.ensure_i_node(args[0])
+        node = self.ensure_i_node(node)
         if node.size > BIGGEST_NOT_HUGE_SIZE:
             raise HugeFileError('huge files not implemented')
         if not node.is_large():
@@ -549,6 +549,73 @@ class UnixV6FileSystem:
         # Write inode
         self.write_i_node(fnode)
 
+    def get_free_blocks(self):
+        '''Return list of all free block numbers'''
+        sup = self.read_superblock()
+        free = sup.nfree
+        free_blks = []
+        for blkn in sup.free[:sup.nfree]:
+            if blkn:
+                if blkn in free_blks:
+                    print('error: 0 block {} repeated'.format(blkn))
+                free_blks.append(blkn)
+            else:
+                print('error:zero blk')
+        chlen = 0
+        next_block = sup.free[0]
+        while next_block:
+            chlen += 1
+            blk = self.read_block(next_block)
+            fr = struct.unpack('H', blk[:2])[0]
+            if not fr:
+                print('abnormal')
+                break
+            free += fr
+            next_block = struct.unpack('H', blk[2:4])[0]
+            for i in range(fr):
+                blkn = struct.unpack('H', blk[2+i*2:4+i*2])[0]
+                if blkn:
+                    if blkn in free_blks:
+                        print('error: {} block {} repeated'.format(chlen, blkn))
+                    free_blks.append(blkn)
+                elif next_block or i!=0:
+                    print('error: zero blk @', len(free_blks))
+        print('chain length:', chlen)
+        if len(set(free_blks))!=len(free_blks):
+            print('error: free blocks are repeated: {} / {}'.format(len(set(free_blks)), len(free_blks)))
+        return free_blks
+
+    def get_used_blocks(self):
+        blks = set()
+        for node in self.yield_inodes():
+            for blk in self.yield_node_blocks(node):
+                blks.add(blk)
+        return list(blks)
+
+    def yield_inodes(self):
+        sup = self.read_superblock()
+        icnt = sup.isize*BLOCK_SIZE//INODE_SIZE
+        acnt = 0
+        for i in range(1, icnt+1):
+            node = self.read_i_node(i)
+            if not node.is_allocated():
+                continue
+            acnt += 1
+            yield node
+        print('{} allocated / {} possible inodes'.format(acnt, icnt))
+
+    def count_free_blocks(self):
+        return len(self.get_free_blocks())
+
+    def integrity(self):
+        blks = self.get_used_blocks()
+        print('Max block:', max(blks))
+        print('Total blocks used:', len(blks))
+        sup = self.read_superblock()
+        all_blocks = len(blks) + self.count_free_blocks() + sup.isize + 2
+        print('Total blocks:', all_blocks)
+        print('Expected image size:', all_blocks*BLOCK_SIZE)
+
     def test(self):
         def local_print(test, res):
             print('{:>30}: {}'.format(test, 'OK' if res else 'FAILED'))
@@ -600,3 +667,12 @@ if __name__=='__main__':
         # Command 'sum' - Unix V5 checksum local file 
         print(fs.sum_file(open(argv[2], 'rb').read()))
 
+    elif argv[1] == 'freeblocks':
+        # Command 'freeblocks' - count how many free blocks left according to the Superflock chain
+        fbks = fs.count_free_blocks()
+        print('Free blocks:', fbks)
+        print('Free blocks size:', fbks*BLOCK_SIZE)
+
+    elif argv[1] == 'integrity':
+        # Command 'integrity' - simple check for consistency
+        fs.integrity()

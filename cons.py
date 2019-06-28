@@ -39,8 +39,6 @@ class ReadOnlyText(scrolledtext.ScrolledText):
         self.print(text + '\n')
 
     def print(self, text):
-        #print("print = ", repr(text))
-        if text == '\r': return
         self.lock.acquire()
         self.config(state=tk.NORMAL)
         lines = float(self.index(tk.END))
@@ -68,6 +66,7 @@ class Terminal(ttk.Frame):
         super(Terminal, self).__init__(None)
         self.keybuff_lock = threading.Lock()
         self.queue = queue.Queue()          # events to be processed by GUI
+        self.debug_queue = queue.Queue()    # debug messages to be shown TODO
         self.meta_pressed = False
         self.control_pressed = False
         self.start_commands = []            # additional start commands
@@ -124,9 +123,9 @@ class Terminal(ttk.Frame):
         self.ctrl_label.grid(row=0, column=1, sticky=tk.W)
         self.start_button = tk.Button(self.bottom, text='Start routine', command=self.start)
         self.start_button.grid(row=0, column=2, sticky=tk.W)
-        self.extract_button = tk.Button(self.bottom, text='Extract', command=self.system.extract_image)
+        self.extract_button = tk.Button(self.bottom, text='Extract', command=self.extract_image)
         self.extract_button.grid(row=0, column=3, sticky=tk.W)
-        self.load_button = tk.Button(self.bottom, text='Load', command=self.system.load_image)
+        self.load_button = tk.Button(self.bottom, text='Load', command=self.load_image)
         self.load_button.grid(row=0, column=4, sticky=tk.W)
         self.sync1_label = ttk.Label(self.bottom, text='Unix V6:')
         self.sync1_label.grid(row=0, column=5, sticky=tk.W)
@@ -142,9 +141,11 @@ class Terminal(ttk.Frame):
         self.sync_button.grid(row=0, column=9, sticky=tk.W)
     
     def console_focus(self, event):
+        # Triggered by click or double-click
         self.console.focus_set()
 
     def autostart(self):
+        # Triggered by timer
         if self.first == '':
             self.manual_start = False
             self.debug.println("Autostart (waiting in the boot screen eats up CPU cycles).")
@@ -152,11 +153,11 @@ class Terminal(ttk.Frame):
             self.start_routine()
 
     def start(self):
+        # Button "Start"
         self.manual_start = False
         self.start_routine()
 
     def start_routine(self):
-        print(self.prompt_cnt)
         if self.prompt_cnt == 0:
             self.paste('unix\n')
             self.first = None       # don't show the "type unix" hint
@@ -166,7 +167,14 @@ class Terminal(ttk.Frame):
         else:
             self.paste('stty -lcase\n')
 
+    def extract_image(self):
+        self.system.interrupt(Interrupt.ExtractImage, 1)
+
+    def load_image(self):
+        self.system.interrupt(Interrupt.LoadImage, 1)
+
     def sync(self):
+        # Bytton "Sync"
         img_dir = self.sync1_entry.get()
         loc_dir = self.sync2_entry.get()
         self.system.sync(img_dir, loc_dir)
@@ -261,17 +269,21 @@ class Terminal(ttk.Frame):
 
     def writedebug(self, msg):
         # This is called by the CPU thead
-        # TODO: use queue
         self.debug.print(msg)
         self.master.update_idletasks()
 
     def process_queue(self):
         # This is called by the GUI thread
         if not self.queue.empty():
+            message = ''
             while not self.queue.empty():
-                # Add text to the terminal
-                msg = self.queue.get()
-                self.console.print(msg)
+                ch = self.queue.get()
+                if ch == '\r': continue
+                message += ch
+                if len(message)>=80:    # avoid being here too long without update
+                    break
+            # Add text to the terminal
+            self.console.print(message)
             self.master.update_idletasks()
         self.master.after(GUI_MSPF, self.process_queue)
 
@@ -320,11 +332,17 @@ class Terminal(ttk.Frame):
     def consread16(self, a):
         # This is called by the CPU thread
         if a == 0o777560:
-            return self.TKS
+            self.keybuff_lock.acquire()
+            TKS = self.TKS
+            self.keybuff_lock.release()
+            return TKS
         elif a == 0o777562:
             return self._getchar()
         elif a == 0o777564:
-            return self.TPS
+            self.keybuff_lock.acquire()
+            TPS = self.TPS
+            self.keybuff_lock.release()
+            return TPS
         elif a == 0o777566:
             return 0
         self.system.panic("read from invalid address " + ostr(a,6))

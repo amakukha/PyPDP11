@@ -473,6 +473,14 @@ class PDP11:
         print('- clock stopped')
 
     def handleinterrupt(self, vec):
+        # PyPDP11 interrupts
+        if vec == INT.LoadImage:
+            self.load_image()
+            return
+        elif vec == INT.ExtractImage:
+            self.extract_image() 
+            return
+        # PDP-11 interrupts
         try:
             prev = self.PS
             self.switchmode(False)

@@ -7,14 +7,18 @@
 
 import struct, os, array, time
 
+DISK_IMAGE_FILENAME = 'rk0.img'
+#DISK_IMAGE_FILENAME = 'extracted.img'
+
 SUPERBLOCK_SIZE = 415
 BLOCK_SIZE = 512
 INODE_SIZE = 32
 BIGGEST_NOT_HUGE_SIZE = BLOCK_SIZE*BLOCK_SIZE/2*8
 
 # TODO:
-# - check that all the free nodes in the chain are actually used 
+# - check that all the non-free nodes (according to the chain) are actually used 
 # - check that all the allocated nodes (files) belong to some parent directory
+# - calculate number of free blocks (command "free")
 
 class HugeFileError(ValueError):
     pass
@@ -65,7 +69,8 @@ class INode:
         else:
             self.setup(*([0]*16))
             #self.actime = self.modtime = int(time.time())
-            self.actime = self.modtime = 0xa60012ce         # 01 Jan 1980, 00:00:00
+            #self.actime = self.modtime = 0xa60012ce         # 01 Jan 1980, 00:00:00
+            self.actime = self.modtime = 1111         # 01 Jan 1970, special timestamp of uploaded files
             self.flag = 0x8000 | 0x01FF         # allocated file, everything is allowed
             self.nlinks = 1
 
@@ -182,25 +187,46 @@ class UnixV6FileSystem:
         data = self.f.read(BLOCK_SIZE)
         return data
 
-    def read_file(self, *args):
-        inode = self.ensure_i_node(args[0])
-        if inode.size > BIGGEST_NOT_HUGE_SIZE:
-            raise ValueError('huge files not implemented')
-        contents = b''
-        if not inode.is_large():
-            for n in inode.addr:
-                if n == 0: break
-                contents += self.read_block(n)
+    def yield_node_blocks(self, node):
+        node = self.ensure_i_node(args[0])
+        if node.size > BIGGEST_NOT_HUGE_SIZE:
+            raise HugeFileError('huge files not implemented')
+        if not node.is_large():
+            for n in node.addr:
+                if n == 0: return
+                yield n
         else:
-            for blk in inode.addr:
+            for blk in node.addr:
                 indirect_block = self.read_block(blk)
                 for i in range(0, len(indirect_block), 2):
                     n = struct.unpack('H', indirect_block[i:i+2])[0]
-                    if n == 0: break
-                    contents += self.read_block(n)
-                if n == 0: break
-        contents = contents[:inode.size]
-        return contents
+                    if n == 0: return
+                    yield n
+
+    def read_file(self, node):
+        contents = b''
+        for n in self.yield_node_blocks(node):
+            contents += self.read_block(n)
+        return contents[:node.size]
+        
+        #node = self.ensure_i_node(args[0])
+        #if node.size > BIGGEST_NOT_HUGE_SIZE:
+        #    raise ValueError('huge files not implemented')
+        #contents = b''
+        #if not node.is_large():
+        #    for n in node.addr:
+        #        if n == 0: break
+        #        contents += self.read_block(n)
+        #else:
+        #    for blk in node.addr:
+        #        indirect_block = self.read_block(blk)
+        #        for i in range(0, len(indirect_block), 2):
+        #            n = struct.unpack('H', indirect_block[i:i+2])[0]
+        #            if n == 0: break
+        #            contents += self.read_block(n)
+        #        if n == 0: break
+        #contents = contents[:node.size]
+        #return contents
 
     def sum_file(self, *args):
         '''
@@ -234,9 +260,9 @@ class UnixV6FileSystem:
                 files.append((inum, name))
         return files
 
-    def find_i_node(self, path, node=1):
+    def path_i_node(self, path, node=1):
         if path and path[0]=='/':
-            return self.find_i_node(path.strip('/'))       # root directory, we already know the inode (1)
+            return self.path_i_node(path.strip('/'))       # root directory, we already know the inode (1)
         #print(path, node)
         inode = self.read_i_node(node)
         if not path:
@@ -248,7 +274,7 @@ class UnixV6FileSystem:
             name, tail = path.split('/', 1) if '/' in path else (path, '')
             for no, nm in self.list_dir(inode):
                 if nm != name: continue
-                return self.find_i_node(tail, no)
+                return self.path_i_node(tail, no)
         return None
 
     def tree(self, inum, save_path=None, tabs=0):
@@ -295,15 +321,16 @@ class UnixV6FileSystem:
             last_inum, last_name = inum, name
         return size, blk_size
 
-    def extract(self, dirname):
+    def extract_dir(self, dst_dirname, src_dirname='/'):
         '''Create a directory and extract all the files from the disk image'''
-        if os.path.exists(dirname):
+        if os.path.exists(dst_dirname):
             raise ValueError("folder exists")
-        os.mkdir(dirname)
-        return self.tree(1, dirname)
+        node = self.path_i_node(src_dirname) 
+        os.mkdir(dst_dirname)
+        return self.tree(node.inode, dst_dirname)
 
     def path_exists(self, path):
-        return self.find_i_node(path) is not None
+        return self.path_i_node(path) is not None
 
     def allocate_i_node(self):
         '''This function return the number of inode'''
@@ -371,13 +398,13 @@ class UnixV6FileSystem:
 
     def mkdir(self, dst):
         # Check correctness
-        node = self.find_i_node(dst)
+        node = self.path_i_node(dst)
         if node:
             raise ValueError("destination exists")
         # Find parent directory
         dirpath, name = os.path.split(dst)
         print ('DIRPATH:',dirpath)
-        pnode = self.find_i_node(dirpath)
+        pnode = self.path_i_node(dirpath)
         if not pnode:
             raise ValueError("destination parent not found")
 
@@ -426,7 +453,7 @@ class UnixV6FileSystem:
         self.write_i_node(dnode)
 
     def upload_file(self, src, dst):
-        fnode = self.find_i_node(dst)      # inode of the file to be overwritten
+        fnode = self.path_i_node(dst)      # inode of the file to be overwritten
         pnode = None                       # inode of the directory to be written into
         dstname = None                     # destination base filename
         if fnode is not None:
@@ -443,7 +470,7 @@ class UnixV6FileSystem:
         # Find parent directory 
         if pnode is None:
             dirpath = os.path.split(dst)[0]
-            pnode = self.find_i_node(dirpath)
+            pnode = self.path_i_node(dirpath)
             if pnode is None:
                 raise ValueError("destination directory not found")
             elif not pnode.is_dir():
@@ -476,6 +503,13 @@ class UnixV6FileSystem:
     def overwrite_file(self, fnode, contents):
         if len(contents) > BIGGEST_NOT_HUGE_SIZE:
             raise HugeFileError("creating huge files not supported")
+
+        # Free all the occupied blocks
+        if fnode.size > 0:
+            for blkn in self.yield_node_blocks(fnode):
+                self.free_block(blkn)
+
+        # New size
         fnode.size = len(contents)
         fnode.addr = [0]*8
         
@@ -535,7 +569,7 @@ class UnixV6FileSystem:
         local_print('FOUND PATH', found)
 
 if __name__=='__main__':
-    fs = UnixV6FileSystem('rk0.img')
+    fs = UnixV6FileSystem(DISK_IMAGE_FILENAME)
     fs.test()
 
     from sys import argv
@@ -545,7 +579,9 @@ if __name__=='__main__':
             size, blk_size = fs.tree(1)
         else:
             # Command "extract" - extracts all the files into new directory
-            size, blk_size = fs.extract(argv[2])   
+            dst_dir = argv[2]
+            src_dir = argv[3] if len(argv)>3 else '/'
+            size, blk_size = fs.extract_dir(dst_dir, src_dir)   
         print('Total size: %d, Block size: %d (%d)' % (size, blk_size*BLOCK_SIZE, blk_size))
     
     elif argv[1] == 'mkdir':

@@ -15,7 +15,8 @@ import tkinter.ttk as ttk
 import tkinter.font as tkfont
 import tkinter.scrolledtext as scrolledtext
 
-GUI_MSPF = 50          # milliseconds per "frame"
+AUTOSTART_TIMEOUT_S = 15    # how many seconds to wait for user input before loading Unix automatically?
+GUI_MSPF = 50               # milliseconds per "frame"
 
 def ostr(d, n=6):
     return '{{:0{}o}}'.format(n).format(d)
@@ -69,24 +70,32 @@ class Terminal(ttk.Frame):
         self.queue = queue.Queue()          # events to be processed by GUI
         self.meta_pressed = False
         self.control_pressed = False
+        self.start_commands = []            # additional start commands
 
         self.TKS = 0
         self.TPS = 0
         self.keybuf = 0
         self.pastebuff = []
         self.system = system
-        self.first = ''
-        self.first_prompt = '##'
+        
+        # GUI little features
+        self.manual_start = True        # started manually or with "Start routine"?
+        self.first = ''                 # first command entered by user; None - don't track (for showing the "unix" hint)
+        self.last_printed = ''          # last three characters printed by OS
+        self.prompt_cnt = 0             # how many times OS outputed prompt
+        self.ips = 0
 
         self.grid()
         self.createWidgets()
 
         self.master.after(GUI_MSPF, self.process_queue)
+        self.master.after(AUTOSTART_TIMEOUT_S*1000, self.autostart)
+        self.master.after(1000, self._show_ips)
 
     def createWidgets(self):
         font = tkfont.Font(family='Courier New', size=15)
         style = ttk.Style()
-        style.configure('.', font=font)
+        #style.configure('.', font=font)
 
         # Center frame 
         #self.center = tk.Frame(self, bd=2, relief=tk.SUNKEN)
@@ -115,20 +124,52 @@ class Terminal(ttk.Frame):
         self.ctrl_label.grid(row=0, column=1, sticky=tk.W)
         self.start_button = tk.Button(self.bottom, text='Start routine', command=self.start)
         self.start_button.grid(row=0, column=2, sticky=tk.W)
-        self.paste_button = tk.Button(self.bottom, text='Paste', command=self.paste)
-        self.paste_button.grid(row=0, column=3, sticky=tk.W)
+        self.extract_button = tk.Button(self.bottom, text='Extract', command=self.system.extract_image)
+        self.extract_button.grid(row=0, column=3, sticky=tk.W)
+        self.load_button = tk.Button(self.bottom, text='Load', command=self.system.load_image)
+        self.load_button.grid(row=0, column=4, sticky=tk.W)
+        self.sync1_label = ttk.Label(self.bottom, text='Unix V6:')
+        self.sync1_label.grid(row=0, column=5, sticky=tk.W)
+        self.sync1_entry = ttk.Entry(self.bottom, text='/usr/pub', width=9)
+        self.sync1_entry.grid(row=0, column=6, sticky=tk.W)
+        self.sync1_entry.insert(0, '/usr/pub')
+        self.sync2_label = ttk.Label(self.bottom, text='Local:')
+        self.sync2_label.grid(row=0, column=7, sticky=tk.W)
+        self.sync2_entry = ttk.Entry(self.bottom, text='data', width=9)
+        self.sync2_entry.grid(row=0, column=8, sticky=tk.W)
+        self.sync2_entry.insert(0, './data')
+        self.sync_button = tk.Button(self.bottom, text='Sync', command=self.sync)
+        self.sync_button.grid(row=0, column=9, sticky=tk.W)
     
     def console_focus(self, event):
         self.console.focus_set()
 
+    def autostart(self):
+        if self.first == '':
+            self.manual_start = False
+            self.debug.println("Autostart (waiting in the boot screen eats up CPU cycles).")
+            self.start_commands += ['date\n']
+            self.start_routine()
+
     def start(self):
-        if self.first_prompt != '# ':
+        self.manual_start = False
+        self.start_routine()
+
+    def start_routine(self):
+        print(self.prompt_cnt)
+        if self.prompt_cnt == 0:
             self.paste('unix\n')
             self.first = None       # don't show the "type unix" hint
-            self.first_prompt = ''  # track the first prompt 
             self.debug.println("Start routine loads UNIX for you and configures terminal to allow lowercase letters.")
+        elif self.prompt_cnt-2>=0 and self.prompt_cnt-2<len(self.start_commands):
+            self.paste(self.start_commands[self.prompt_cnt-2])
         else:
             self.paste('stty -lcase\n')
+
+    def sync(self):
+        img_dir = self.sync1_entry.get()
+        loc_dir = self.sync2_entry.get()
+        self.system.sync(img_dir, loc_dir)
 
     def paste(self, what=''):
         if not what:
@@ -170,6 +211,18 @@ class Terminal(ttk.Frame):
             self.update_ctrl()
         ch = event.char
         if len(ch)==1 and ord(ch)<256:
+
+            # Process input to show the hint
+            if ch == '\r': ch = '\n' # TODO: will it work on Windows?
+            if self.first != None:
+                if ch == '\n':
+                    if self.first != 'unix':
+                        self.console.println("")
+                        self.console.println("hint: type \"unix\" command to run Unix V6")
+                    self.first = None
+                else:
+                    self.first += ch
+
             # Handle the Ctrl+C / Ctrl+V properly
             if ch in 'c\x03' and (self.control_pressed or self.meta_pressed) and self.console.tag_ranges(tk.SEL):
                 selection = self.console.selection_get()
@@ -185,17 +238,6 @@ class Terminal(ttk.Frame):
                 self.paste()
                 return
             if ch == '\x03': print('Ctrl+V')
-
-            # Process input to show the hint
-            if ch == '\r': ch = '\n' # Will it work on Windows?
-            if self.first != None:
-                if ch == '\n':
-                    if self.first != 'unix':
-                        self.console.println("")
-                        self.console.println("hint: type \"unix\" command to run Unix V6")
-                    self.first = None
-                else:
-                    self.first += ch
 
             #  Pass the character to the OS
             self.keybuff_lock.acquire()
@@ -236,12 +278,11 @@ class Terminal(ttk.Frame):
     def add_to_write_queue(self, msg):   # terminal
         # This is called by the CPU thread
         self.queue.put(msg)
-        if len(self.first_prompt)<2:
-            if not self.first_prompt and msg == '#':
-                self.first_prompt += msg
-            elif self.first_prompt=='#' and msg == ' ':
-                self.first_prompt += msg
-                self.paste('stty -lcase\n')
+        self.last_printed = self.last_printed[-1:]+msg 
+        if self.last_printed == '# ':
+            self.prompt_cnt += 1
+            if self.prompt_cnt < 2+len(self.start_commands) and not self.manual_start:
+                self.start()
 
     def _addchar(self, c):
         # This is called by the GUI thread
@@ -319,8 +360,6 @@ class Terminal(ttk.Frame):
         else:
             system.panic("write to invalid address " + ostr(a,6));
 
-    def show_ips(self, ips):
-        # This is called by the CPU thread
-        #self.queue.put(('ips', ips))       # this mechanism breaks the output for some reason TODO
-        self.ips_label.config(text='IPS ={:-4.0f}K'.format(ips/1000))
-    
+    def _show_ips(self):
+        self.ips_label.config(text='IPS ={:-4.0f}K'.format(self.ips/1000))
+        self.master.after(1000, self._show_ips)

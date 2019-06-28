@@ -43,7 +43,7 @@ class RK05:
         self.system = system
        
         # rkinit
-        self.disk = bytearray(open(RK05.IMAGE_FILENAME, 'rb').read())
+        self.load_image(RK05.IMAGE_FILENAME)
         if len(self.disk) != RK05.EXPECTED_IMAGE_LENGTH:
             self.system.panic('unexpected image length {} != {}'.format(len(self.disk), RK05.EXPECTED_IMAGE_LENGTH))
         print ('Disk image loaded:', len(self.disk))
@@ -60,6 +60,12 @@ class RK05:
         self.cylinder = 0
 
         self.reset()
+
+    def save_image(self, filename):
+        open(filename, 'wb').write(self.disk)
+
+    def load_image(self, filename):
+        self.disk = bytearray(open(filename, 'rb').read())
 
     def reset(self):
         # Reset registers to default values

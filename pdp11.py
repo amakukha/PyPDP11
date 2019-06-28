@@ -15,6 +15,7 @@ from cons import Terminal, ostr
 from interrupt import Interrupt
 from disasm import DISASM_TABLE
 
+EXTRACTED_IMAGE = 'extracted.img'
 INT = Interrupt     # shorthand for Interrupt
 
 class Trap(Exception):
@@ -73,7 +74,6 @@ class PDP11:
         self.SR2 = 0
         self.interrupts = queue.PriorityQueue()
         self.last_interrupt_priority = INT.MAX_PRIORITY
-        self.lastTime = time.time()
 
         # Terminal
         self.terminal = Terminal(self)
@@ -450,13 +450,25 @@ class PDP11:
         self.running.set()
 
     def clock(self):
+        self.clock_cnt = 0
+        self.last_time = time.time()
+
         while not self.clock_stop.is_set():           
-            time.sleep(0.02)
+            time.sleep(0.05)    # PDP-11 clock runs at 50 or 60 Hz; intentionally running it at 20 Hz to reduce CPU usage 
+                                # time will run slower inside the emulation
 
             # Clock interrupt
             self.LKS |= 0x80                    # bit 7: set to 1 every 20 ms
             if self.LKS & 0x40:                 # bit 6: when set, an interrupt will occur
                 self.interrupt(INT.CLOCK, 6)
+
+            # Calculate iterations per seconds and pass to GUI thread
+            self.clock_cnt += 1
+            if self.clock_cnt & 0xF == 0:
+                now = time.time()
+                self.terminal.ips = int(self.ips/(now - self.last_time))
+                self.last_time = now
+                self.ips = 0
 
         print('- clock stopped')
 
@@ -554,6 +566,18 @@ class PDP11:
         o <<= 1
         self.R[7] += o
 
+    def extract_image(self):
+        # This function is called by the GUI
+        self.rk.save_image(EXTRACTED_IMAGE)
+        self.writedebug('Disk image saved to: {}\n'.format(EXTRACTED_IMAGE))
+
+    def load_image(self):
+        # This function is called by the GUI
+        self.rk.load_image(EXTRACTED_IMAGE)
+        self.writedebug('Disk image loaded from file: {}\n'.format(EXTRACTED_IMAGE))
+
+    def sync(self, unix_dir, local_dir):
+        print (unix_dir, local_dir)
 
     def step(self):
         #var val, val1, val2, ia, da, sa, d, s, l, r, o, max, maxp, msb;
@@ -1135,7 +1159,7 @@ class PDP11:
                 self.stop()
                 return
         elif bits == 0o000001: # WAIT
-            time.sleep(0.001)
+            #time.sleep(0.001)
             if not self.curuser:
                 self.running.clear()
                 return
@@ -1159,14 +1183,17 @@ class PDP11:
 
 
     def run(self):
+        interrupted_from_wait = False
         while not self.cpu_stop.is_set():
             try:
                 self.step()
 
-                self.running.wait()
+                if not self.running.is_set():
+                    self.running.wait()
+                    interrupted_from_wait = True
 
                 # Handle interrupts
-                if not self.interrupts.empty():
+                if (interrupted_from_wait or (self.step_cnt & 0xF) == 0) and not self.interrupts.empty():
                     priority_level = ((self.PS >> 5) & 7)
                     if self.last_interrupt_priority > priority_level:
                         inter = self.interrupts.get()
@@ -1178,14 +1205,7 @@ class PDP11:
                             # remember this "unprocessed" interrupt's priority for minor optimization
                             self.last_interrupt_priority = inter.pri
                             self.interrupts.put(inter)
-
-                # Show iterations per seconds
-                # TODO: move into clock thread
-                if self.ips >= 150000:
-                    now = time.time()
-                    self.terminal.show_ips(int(self.ips/(now - self.lastTime)))
-                    self.ips = 0
-                    self.lastTime = now
+                    interrupted_from_wait = False
 
             except Trap as e:
                 self.trapat(e.num, str(e))

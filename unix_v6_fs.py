@@ -5,7 +5,7 @@
 #     https://github.com/amakukha/PyPDP11
 # Copyright (c) 2019, Andriy Makukha, MIT Licence
 
-import struct, os, array, time
+import struct, os, array, time, datetime
 
 DISK_IMAGE_FILENAME = 'rk0.img'
 #DISK_IMAGE_FILENAME = 'extracted.img'
@@ -56,7 +56,7 @@ class Superblock:
 class INode:
     def __init__(self, *args):
         self.inode = 0
-        if len(args)==20:
+        if len(args)==18:
             self.setup(*args)
         elif len(args)==1:
             if type(args[0])!=bytes:
@@ -64,15 +64,14 @@ class INode:
                 data = args[0].read(INODE_SIZE)
             else:
                 data = args[0]
-            params = struct.unpack('HBBBBHHHHHHHHHII', data)
+            params = struct.unpack('HBBBBHHHHHHHHHHHHH', data)
             self.setup(*params)
         else:
-            self.setup(*([0]*16))
-            #self.actime = self.modtime = int(time.time())
-            #self.actime = self.modtime = 0xa60012ce         # 01 Jan 1980, 00:00:00
-            self.actime = self.modtime = 1111         # 01 Jan 1970, special timestamp of uploaded files
-            self.flag = 0x8000 | 0x01FF         # allocated file, everything is allowed
-            self.nlinks = 1
+            self.setup(*([0]*18))
+            tt = int(time.time())               # current Unix epoch time
+            self.actime = self.modtime = 0x15000000 | (tt & 0xFFFFFF)       # map to year 1981 setting higher byte to 0x15
+            self.flag = 0x8000 | 0x01FF         # allocated file, all the permissions granted
+            self.nlinks = 1                     # TODO: how to set these properly?
 
     def setup(self, *args):
         # According to Unix V6 /usr/man/man5/fs.5
@@ -82,14 +81,14 @@ class INode:
         self.gid = args[3]              # byte: group ID of owner
         self.size = (args[4]<<16) + args[5]   # byte + short
         self.addr = list(args[6:14])    # uint16_t[8]: device addresses constituting file
-        self.actime = args[14]          # time of last access
-        self.modtime = args[15]         # time of last modification
+        self.actime = (args[14] << 16) | args[15]  # time of last access 
+        self.modtime = (args[16] << 16) | args[17] # time of last modification
 
     def serialize(self):
         data = struct.pack('HBBBBH', self.flag, self.nlinks, self.uid, self.gid, self.size>>16, self.size & 0xFFFF)
         for i in range(8):
             data += struct.pack('H', self.addr[i])
-        data += struct.pack('II', self.actime, self.modtime)
+        data += struct.pack('HHHH', self.actime >> 16, self.actime & 0xFFFF, self.modtime >> 16, self.modtime & 0xFFFF)
         return data
 
     def set_free(self):                 # disallocate, mark inode as free
@@ -109,6 +108,9 @@ class INode:
 
     def is_dir(self):
         return bool((self.flag & 0x4000) == 0x4000)
+
+    def is_regular_file(self):
+        return bool((self.flag & 0x4000) == 0x0000)
 
     def is_large(self):
         return bool(self.flag & 0x1000)
@@ -206,6 +208,7 @@ class UnixV6FileSystem:
                     yield n
 
     def read_file(self, node):
+        node = self.ensure_i_node(node)
         contents = b''
         for n in self.yield_node_blocks(node):
             contents += self.read_block(n)
@@ -301,12 +304,13 @@ class UnixV6FileSystem:
             if not node.is_dir() and save_path is not None:
                 filepath = os.path.join(save_path, name)
                 open(filepath, 'wb').write(contents)
-            print('{name:15s}\t{size}\t{flags}\tsum={sum}\t{nlinks:d}'.format(
+            print('{name:15s}\t{size}\t{flags}\tsum={sum}\t{nlinks:d}\t{modtime:x}'.format(
                         name = name + ('/' if node.is_dir() else ' '),
                         flags = node.flags_string(),
                         size = node.size,
                         sum = self.sum_file(contents),
-                        nlinks = node.nlinks)
+                        nlinks = node.nlinks,
+                        modtime = node.modtime)
             )
             size += node.size
             blk_size += (node.size // 512) + (1 if node.size % 512 else 0)

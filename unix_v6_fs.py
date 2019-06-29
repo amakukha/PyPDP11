@@ -187,7 +187,7 @@ class UnixV6FileSystem:
         data = self.f.read(BLOCK_SIZE)
         return data
 
-    def yield_node_blocks(self, node):
+    def yield_node_blocks(self, node, include_all=False):
         node = self.ensure_i_node(node)
         if node.size > BIGGEST_NOT_HUGE_SIZE:
             raise HugeFileError('huge files not implemented')
@@ -197,6 +197,8 @@ class UnixV6FileSystem:
                 yield n
         else:
             for blk in node.addr:
+                if not blk: return
+                yield blk
                 indirect_block = self.read_block(blk)
                 for i in range(0, len(indirect_block), 2):
                     n = struct.unpack('H', indirect_block[i:i+2])[0]
@@ -506,7 +508,7 @@ class UnixV6FileSystem:
 
         # Free all the occupied blocks
         if fnode.size > 0:
-            for blkn in self.yield_node_blocks(fnode):
+            for blkn in self.yield_node_blocks(fnode,include_all=True):
                 self.free_block(blkn)
 
         # New size
@@ -588,7 +590,7 @@ class UnixV6FileSystem:
     def get_used_blocks(self):
         blks = set()
         for node in self.yield_inodes():
-            for blk in self.yield_node_blocks(node):
+            for blk in self.yield_node_blocks(node, include_all=True):
                 blks.add(blk)
         return list(blks)
 

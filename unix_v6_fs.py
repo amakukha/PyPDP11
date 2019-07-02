@@ -8,18 +8,24 @@
 import struct, os, array, time, datetime
 
 DISK_IMAGE_FILENAME = 'rk0.img'
-#DISK_IMAGE_FILENAME = 'extracted.img'
 
 SUPERBLOCK_SIZE = 415
 BLOCK_SIZE = 512
 INODE_SIZE = 32
 BIGGEST_NOT_HUGE_SIZE = BLOCK_SIZE*BLOCK_SIZE/2*8
 
+# Higher bytes of file modtime used by PyPDP11 for syncing and creating
+CREATED_BY_PYPDP11 = 0x13000000         # all in 1980
+SYNCED_BY_PYPDP11  = 0x15000000         # all in 1981
+
 # TODO:
 # - check that all the non-free nodes (according to the chain) are actually used 
 # - check that all the allocated nodes (files) belong to some parent directory
 
 class HugeFileError(ValueError):
+    pass
+
+class SyncError(ValueError):
     pass
 
 class Superblock:
@@ -69,7 +75,7 @@ class INode:
         else:
             self.setup(*([0]*18))
             tt = int(time.time())               # current Unix epoch time
-            self.actime = self.modtime = 0x15000000 | (tt & 0xFFFFFF)       # map to year 1981 setting higher byte to 0x15
+            self.actime = self.modtime = CREATED_BY_PYPDP11 | (tt & 0xFFFFFF)
             self.flag = 0x8000 | 0x01FF         # allocated file, all the permissions granted
             self.nlinks = 1                     # TODO: how to set these properly?
 
@@ -138,6 +144,9 @@ class INode:
         s += 'X' if self.flag & 0x0001 else '.'
         return s
 
+    def __lt__(self, other):
+        return self.inode < other.inode
+
     def __repr__(self):
         return 'INode(uid={uid},gid={gid},addrs={addr},size={size},flags={flags})'.format(
                     uid=self.uid, gid=self.gid, addr=str(self.addr), size=self.size,
@@ -200,7 +209,8 @@ class UnixV6FileSystem:
         else:
             for blk in node.addr:
                 if not blk: return
-                yield blk
+                if include_all:
+                    yield blk
                 indirect_block = self.read_block(blk)
                 for i in range(0, len(indirect_block), 2):
                     n = struct.unpack('H', indirect_block[i:i+2])[0]
@@ -251,8 +261,8 @@ class UnixV6FileSystem:
                 s = (s+1) & 0xFFFF
         return s
 
-    def list_dir(self, *args):
-        inode = self.ensure_i_node(args[0])
+    def list_dir(self, dnode: INode or int) -> [(int, str)]:
+        inode = self.ensure_i_node(dnode)
         # Read & interpret file
         if not inode.is_dir():
             return None
@@ -281,6 +291,114 @@ class UnixV6FileSystem:
                 if nm != name: continue
                 return self.path_i_node(tail, no)
         return None
+
+    def sync(self, unix_dir, local_dir):            # pathes are expected
+        '''Synchronizes Unix V6 directory with a local directory.
+        The algorithm uses file modification timestamps.
+        The highest byte of the timestamp is set to either 0x13 (CREATED) or 0x15 (SYNCED) by this script.
+        The assumption is that if the highest byte is not one of those two, the file was created by or
+        modified by Unix V6. A file modified by Unix is always downloaded to a local directory and its 
+        highest byte is set to SYNCED. Otherwise, the file in Unix V6 can be overwritten if local directory
+        contains a newer version (that is, different from already uploaded).
+
+        This method is based on my directoried comparing script: 
+            https://gist.github.com/amakukha/f489cbde2afd32817f8e866cf4abe779
+        '''
+        # Ensure validity
+        dnode = self.path_i_node(unix_dir)
+        if dnode is None:
+            raise SyncError('"{}" not found in filesystem'.format(unix_dir))
+        if not dnode.is_dir():
+            raise ValueError('"{}" is not Unix V6 directory'.format(unix_dir))
+        if not os.path.exists(local_dir):
+            print('Creating:', local_dir)
+            os.mkdir(local_dir)
+        elif not os.path.isdir(local_dir):
+            raise SyncError('local directory "{}" not found'.format(local_dir))
+
+        # Get lists of files
+        ufs = [(fn, os.path.join(unix_dir, fn), self.read_i_node(inum)) for inum, fn in self.list_dir(dnode)]
+        lfs = [(fn, os.path.join(local_dir, fn)) for fn in os.listdir(local_dir)]
+
+        # Determine type
+        ufs = sorted([(fn, pth, node.is_dir(), node) for fn, pth, node in ufs if fn not in '..'])
+        lfs = sorted([(fn, pth, os.path.isdir(pth)) for fn, pth in lfs])
+
+        # Synchronize current dirrectory
+
+        def download(uitem, ldir):
+            print('DOWNLOAD: {} into {}'.format(uitem[1], local_dir))
+            local_fn = os.path.join(local_dir, uitem[0])
+            self.download_file(uitem[3], local_fn)
+            # Set the synced flags
+            #lmtime = int(os.stat(local_fn).st_mtime)
+            #uitem[3].modtime = SYNCED_BY_PYPDP11 | (0xFFFFFF & lmtime)
+            #self.write_i_node(uitem[3])
+
+        def upload(litem, udir):
+            print('UPLOAD: {} into {}'.format(litem[1], unix_dir))
+            node = self.upload_file(litem[1], os.path.join(unix_dir, litem[0]))
+            # Set the local time
+            lmtime = int(os.stat(litem[1]).st_mtime)
+            node.modtime = SYNCED_BY_PYPDP11 | (0xFFFFFF & lmtime)
+            self.write_i_node(node)
+
+        ui = li = cnt = 0
+        sync_subdirs = []
+        while ui < len(ufs) and li < len(lfs):
+            if ufs[ui][0] == lfs[li][0]:        # same name
+                if ufs[ui][2] == lfs[li][2]:    # same type
+                    if ufs[ui][2]:
+                        sync_subdirs.append((ufs[ui][1], lfs[li][1]))
+                    else:
+                        # COMPARE FILES
+                        umtime = ufs[ui][3].modtime
+                        lmtime = int(os.stat(lfs[li][1]).st_mtime)
+                        if (umtime & 0xFF000000) not in [CREATED_BY_PYPDP11, SYNCED_BY_PYPDP11]:
+                            print('MODIFIED IN UNIX:')
+                            download(ufs[ui], local_dir)
+                        elif (umtime & 0xFFFFFF) != (lmtime & 0xFFFFFF):
+                            print('MODIFIED LOCALLY:')
+                            upload(lfs[li], unix_dir)
+                else:
+                    raise SyncError('type mismatch: {} and {}'.format(ufs[ui][1], lfs[li][1]))
+                ui += 1;  li += 1
+            elif ufs[ui][0] < lfs[li][0]:
+                if ufs[ui][2]:
+                    sync_subdirs.append((ufs[ui][1], os.path.join(local_dir, ufs[ui][0])))
+                else:
+                    download(ufs[ui], local_dir)
+                ui += 1
+            else:
+                if lfs[li][2]:
+                    sync_subdirs.append((os.path.join(unix_dir, lfs[li][0]), lfs[li][1]))
+                else:
+                    upload(lfs[li], unix_dir) 
+                li += 1
+            cnt += 1
+
+        # TODO: DRY
+        while ui < len(ufs):
+            if ufs[ui][2]:
+                sync_subdirs.append((ufs[ui][1], os.path.join(local_dir, ufs[ui][0])))
+            else:
+                download(ufs[ui], local_dir)
+            ui += 1
+            cnt += 1
+        while li < len(lfs):
+            if lfs[li][2]:
+                sync_subdirs.append((os.path.join(unix_dir, lfs[li][0]), lfs[li][1]))
+            else:
+                upload(lfs[li], unix_dir)
+            li += 1
+            cnt += 1
+
+        # Sync subfolders recursively
+        for udir, ldir in sync_subdirs:
+            cnt += self.sync(udir, ldir)
+       
+        return cnt
+
 
     def tree(self, inum, save_path=None, tabs=0):
         '''Prints subdirectory tree to standard output.
@@ -458,7 +576,14 @@ class UnixV6FileSystem:
         dnode.size += 16
         self.write_i_node(dnode)
 
-    def upload_file(self, src, dst):
+    def download_file(self, node: INode or int, dst: str):
+        # TODO: allow accepting unix path
+        # TODO: allow accepting directory as a destination
+        node = self.ensure_i_node(node)
+        data = self.read_file(node)
+        open(dst, 'wb').write(data)
+
+    def upload_file(self, src: str, dst: str):
         fnode = self.path_i_node(dst)      # inode of the file to be overwritten
         pnode = None                       # inode of the directory to be written into
         dstname = None                     # destination base filename
@@ -495,6 +620,7 @@ class UnixV6FileSystem:
             self.add_to_directory(pnode, fnode, dstname)
         else:
             self.overwrite_file(fnode, contents)
+        return fnode
 
     def _create_file(self, contents):
         fnode = self.allocate_i_node()
@@ -593,12 +719,12 @@ class UnixV6FileSystem:
 
     def get_used_blocks(self):
         blks = set()
-        for node in self.yield_inodes():
+        for node in self.yield_all_inodes():
             for blk in self.yield_node_blocks(node, include_all=True):
                 blks.add(blk)
         return list(blks)
 
-    def yield_inodes(self):
+    def yield_all_inodes(self):
         sup = self.read_superblock()
         icnt = sup.isize*BLOCK_SIZE//INODE_SIZE
         acnt = 0
@@ -666,7 +792,7 @@ if __name__=='__main__':
         print(fs.path_exists(argv[2]))
 
     elif argv[1] == 'upload':
-        # Command 'umpoad' - copy file from local filesystem into Unix V6 filesystem
+        # Command 'upload' - copy file from local filesystem into Unix V6 filesystem
         fs.upload_file(argv[2], argv[3])
 
     elif argv[1] == 'sum':
@@ -682,3 +808,10 @@ if __name__=='__main__':
     elif argv[1] == 'integrity':
         # Command 'integrity' - simple check for consistency
         fs.integrity()
+
+    elif argv[1] == 'sync':
+        # Command 'sync' - synchronize directory with Unix V6
+        print (fs.sync(argv[2], argv[3]),'files and directories synced')
+
+    else:
+        raise ValueError('unknown command: '+argv[1])

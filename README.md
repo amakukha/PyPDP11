@@ -17,7 +17,7 @@ Example screenshots:
 
 ## Prerequisites
 
- - Python 3
+ - Python 3.5+
  
 Make sure Python 3 is installed with Tcl version 8.6 or later (especially if you are using MacOS).
 To check:
@@ -46,5 +46,8 @@ The disk image included into this repository misses on most
 [sources](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/source),
 [manual pages](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/man) and
 [documentation](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/doc).
-It is unsurprising, knowing that RK05 could only contain around 2.5 MB of data, while the Unix V6
-sources alone measure beyond that capacity.
+It is unsurprising, knowing that RK05 disk could only contain around 2.5 MB of data, while the
+Unix V6 sources alone measure beyond that capacity.
+
+Complete UNIX V6 manual in searchable PDF can be found
+[here](https://ia800600.us.archive.org/19/items/v6-manual/v6-manual.pdf).

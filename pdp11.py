@@ -74,6 +74,7 @@ class PDP11:
         self.SR2 = 0
         self.interrupts = queue.PriorityQueue()
         self.last_interrupt_priority = INT.MAX_PRIORITY
+        self.running = threading.Event()
 
         # Terminal
         self.terminal = Terminal(self)
@@ -98,6 +99,8 @@ class PDP11:
         master.geometry('{}x{}+{}+{}'.format(w, h, x, y))
 
     def reset(self):
+        self.running.clear()
+
         self.R = [0, 0, 0, 0, 0, 0, 0, 0]       # registers
         self.KSP = 0        # kernel mode stack pointer
         self.USP = 0        # user mode stack pointer
@@ -118,11 +121,9 @@ class PDP11:
         self.pages = [Page(0, 0) for _ in range(16)]
         self.R[7] = 0o2002
 
-        self.cleardebug()
-        self.terminal.clear()
+        self.terminal.request_reset()
         self.rk.reset()
 
-        self.running = threading.Event()
         self.running.set()
 
 
@@ -483,6 +484,9 @@ class PDP11:
                 return
             elif vec == INT.Synchronize:
                 self.sync() 
+                return
+            elif vec == INT.Reset:
+                self.reset() 
                 return
         # PDP-11 interrupts
         try:

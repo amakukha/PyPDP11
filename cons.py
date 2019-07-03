@@ -49,6 +49,8 @@ class ReadOnlyText(scrolledtext.ScrolledText):
         self.see(tk.END)
         self.lock.release()
 
+
+
     def clear(self):
         self.lock.acquire()
         self.config(state=tk.NORMAL)
@@ -71,18 +73,11 @@ class Terminal(ttk.Frame):
         self.control_pressed = False
         self.start_commands = []            # additional start commands
 
-        self.TKS = 0
-        self.TPS = 0
-        self.keybuf = 0
         self.pastebuff = []
         self.system = system
-        
-        # GUI little features
-        self.manual_start = True        # started manually or with "Start routine"?
-        self.first = ''                 # first command entered by user; None - don't track (for showing the "unix" hint)
-        self.last_printed = ''          # last three characters printed by OS
-        self.prompt_cnt = 0             # how many times OS outputed prompt
+        self.setup()
         self.ips = 0
+        self.first = ''                 # first command entered by user; None - don't track (for showing the "unix" hint)
 
         self.grid()
         self.createWidgets()
@@ -90,6 +85,8 @@ class Terminal(ttk.Frame):
         self.master.after(GUI_MSPF, self.process_queue)
         self.master.after(AUTOSTART_TIMEOUT_S*1000, self.autostart)
         self.master.after(1000, self._show_ips)
+
+
 
     def createWidgets(self):
         font = tkfont.Font(family='Courier New', size=15)
@@ -121,11 +118,11 @@ class Terminal(ttk.Frame):
         self.ips_label.grid(row=0, column=0, sticky=tk.W)
         self.ctrl_label = tk.Label(self.bottom, text='ctrl', font=font, relief=tk.SUNKEN, width=5)
         self.ctrl_label.grid(row=0, column=1, sticky=tk.W)
-        self.start_button = tk.Button(self.bottom, text='Start routine', command=self.start)
+        self.start_button = tk.Button(self.bottom, text='Start routine', command=self.start_action)
         self.start_button.grid(row=0, column=2, sticky=tk.W)
-        self.extract_button = tk.Button(self.bottom, text='Extract', command=self.extract_image)
+        self.extract_button = tk.Button(self.bottom, text='Extract', command=self.extract_action)
         self.extract_button.grid(row=0, column=3, sticky=tk.W)
-        self.load_button = tk.Button(self.bottom, text='Load', command=self.load_image)
+        self.load_button = tk.Button(self.bottom, text='Load', command=self.load_action)
         self.load_button.grid(row=0, column=4, sticky=tk.W)
         self.sync1_label = ttk.Label(self.bottom, text='Unix V6:')
         self.sync1_label.grid(row=0, column=5, sticky=tk.W)
@@ -137,8 +134,10 @@ class Terminal(ttk.Frame):
         self.sync2_entry = ttk.Entry(self.bottom, text='data', width=9)
         self.sync2_entry.grid(row=0, column=8, sticky=tk.W)
         self.sync2_entry.insert(0, './data')
-        self.sync_button = tk.Button(self.bottom, text='Sync', command=self.sync)
+        self.sync_button = tk.Button(self.bottom, text=' Sync ', command=self.sync_action)
         self.sync_button.grid(row=0, column=9, sticky=tk.W)
+        self.sync_button = tk.Button(self.bottom, text='Reset', command=self.reset_action)
+        self.sync_button.grid(row=0, column=10, sticky=tk.W)
     
     def console_focus(self, event):
         # Triggered by click or double-click
@@ -152,11 +151,6 @@ class Terminal(ttk.Frame):
             self.start_commands += ['date\n']
             self.start_routine()
 
-    def start(self):
-        # Button "Start"
-        self.manual_start = False
-        self.start_routine()
-
     def start_routine(self):
         if self.prompt_cnt == 0:
             self.paste('unix\n')
@@ -167,21 +161,26 @@ class Terminal(ttk.Frame):
         else:
             self.paste('stty -lcase\n')
 
-    def extract_image(self):
-        # Button "Extract"
+    def start_action(self):
+        self.manual_start = False
+        self.start_routine()
+
+    def extract_action(self):
         self.system.interrupt(Interrupt.ExtractImage, 1)
 
-    def load_image(self):
-        # Button "Load"
+    def load_action(self):
         self.system.interrupt(Interrupt.LoadImage, 1)
 
-    def sync(self):
-        # Bytton "Sync"
+    def sync_action(self):
         self.system.unix_dir = self.sync1_entry.get()
         self.system.local_dir = self.sync2_entry.get()
         self.system.interrupt(Interrupt.Synchronize, 1)
 
+    def reset_action(self):
+        self.system.interrupt(Interrupt.Reset, 1)
+
     def paste(self, what=''):
+        '''This method is call on Ctrl+V'''
         if not what:
             what = self.master.clipboard_get()
         if not what:
@@ -254,20 +253,42 @@ class Terminal(ttk.Frame):
             self._addchar(ord(event.char))
             self.keybuff_lock.release()
 
+    def request_reset(self):
+        # This method is called by CPU thread
+        self.reset_requested = True
+
+    def reset(self):
+        self.clear()
+        self.cleardebug()
+        self.setup()
+
+    def setup(self):
+        # This method must be called by GUI thread
+        self.keybuff_lock.acquire()
+
+        self.TKS = 0
+        self.TPS = 1<<7
+        self.keybuf = 0
+
+        # GUI little features
+        self.manual_start = True        # started manually or with "Start routine"?
+        self.last_printed = ''          # last three characters printed by OS
+        self.prompt_cnt = 0             # how many times OS outputed prompt
+        self.reset_requested = False
+
+        self.keybuff_lock.release()
+
     def cleardebug(self):
         # TODO: use queue
         self.debug.clear()
 
     def clear(self):        # terminal
         # TODO: use queue
-        # Clear terminal screen
-        #var len = document.getElementById("terminal").firstChild.nodeValue.length;
-        #document.getElementById("terminal").firstChild.deleteData(0, len);
         self.console.clear()
 
         self.TKS = 0
         self.TPS = 1<<7
-        self.T = None
+        #self.T = 0  # mistake in original code?
 
     def writedebug(self, msg):
         # This is called by the CPU thead
@@ -290,6 +311,8 @@ class Terminal(ttk.Frame):
             # Add text to the terminal
             self.console.print(message)
             self.master.update_idletasks()
+        if self.reset_requested:
+            self.reset()
         self.master.after(GUI_MSPF, self.process_queue)
 
     def add_to_write_queue(self, msg):   # terminal
@@ -299,7 +322,7 @@ class Terminal(ttk.Frame):
         if self.last_printed == '# ':
             self.prompt_cnt += 1
             if self.prompt_cnt < 2+len(self.start_commands) and not self.manual_start:
-                self.start()
+                self.start_action()
 
     def _addchar(self, c):
         # This is called by the GUI thread

@@ -282,6 +282,8 @@ class Terminal(ttk.Frame):
                 ch = self.queue.get()
                 if ch in '\r\x7f':          # ignored characters
                     continue
+                if ord(ch)<32 and ch!='\n' or ord(ch)>126:
+                    ch = repr(ch)[1:-1]     # Python-style escaping
                 message += ch
                 if len(message)>=80:        # avoid cycling here for too long without update
                     break

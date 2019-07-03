@@ -168,16 +168,18 @@ class Terminal(ttk.Frame):
             self.paste('stty -lcase\n')
 
     def extract_image(self):
+        # Button "Extract"
         self.system.interrupt(Interrupt.ExtractImage, 1)
 
     def load_image(self):
+        # Button "Load"
         self.system.interrupt(Interrupt.LoadImage, 1)
 
     def sync(self):
         # Bytton "Sync"
-        img_dir = self.sync1_entry.get()
-        loc_dir = self.sync2_entry.get()
-        self.system.sync(img_dir, loc_dir)
+        self.system.unix_dir = self.sync1_entry.get()
+        self.system.local_dir = self.sync2_entry.get()
+        self.system.interrupt(Interrupt.Synchronize, 1)
 
     def paste(self, what=''):
         if not what:
@@ -278,9 +280,10 @@ class Terminal(ttk.Frame):
             message = ''
             while not self.queue.empty():
                 ch = self.queue.get()
-                if ch == '\r': continue
+                if ch in '\r\x7f':          # ignored characters
+                    continue
                 message += ch
-                if len(message)>=80:    # avoid being here too long without update
+                if len(message)>=80:        # avoid cycling here for too long without update
                     break
             # Add text to the terminal
             self.console.print(message)

@@ -22,8 +22,9 @@ class Interrupt:
     RK      = 0o220
 
     # PyPDP11: these event should be called with interrupt priority 0 (to be executed last)
-    ExtractImage = 0o420
-    LoadImage    = 0o440
+    ExtractImage = 0o410
+    LoadImage    = 0o420
+    Synchronize  = 0o440
 
     def __init__(self, vec, pri):
         self.vec = vec

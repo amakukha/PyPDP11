@@ -5,7 +5,7 @@
 #     https://github.com/amakukha/PyPDP11
 # Copyright (c) 2019, Andriy Makukha, MIT Licence
 
-import struct, os, array, time, datetime
+import struct, os, array, time, datetime, io
 
 DISK_IMAGE_FILENAME = 'rk0.img'
 
@@ -154,51 +154,56 @@ class INode:
                 )
 
 class UnixV6FileSystem:
-    def __init__(self, filename):
-        self.f = open(filename, 'r+b')
+    def __init__(self, arg: str or bytes):
+        if isinstance(arg, str):
+            # Filename assumed
+            self.f = open(arg, 'r+b')
+        elif isinstance(arg, bytes):
+            # Actual data assumed
+            self.f = io.BytesIO(arg)
 
     def read_superblock(self):
         self.f.seek(BLOCK_SIZE)
         sup = Superblock(self.f)
         return sup
 
-    def write_block(self, blkn, data):
+    def write_block(self, blkn: int, data: bytes):
         if len(data) > BLOCK_SIZE:
             raise ValueError('data is too big to fit into one block')
         data += b'\x00' * (BLOCK_SIZE - len(data)) 
         self.f.seek(BLOCK_SIZE*blkn)
         self.f.write(data)
 
-    def write_superblock(self, sup):
+    def write_superblock(self, sup: Superblock):
         data = sup.serialize()
         self.write_block(1, data)
 
-    def read_i_node(self, i):
+    def read_i_node(self, i: int):
         self.f.seek(BLOCK_SIZE*2 + (i-1)*32)
         node = INode(self.f)
         node.inode = i          # remember its number for convenience
         return node
 
-    def write_i_node(self, node):
+    def write_i_node(self, node: INode):
         data = node.serialize()
         self.f.seek(BLOCK_SIZE*2 + (node.inode-1)*32)
         self.f.write(data)
 
-    def ensure_i_node(self, x):
+    def ensure_i_node(self, x: INode or int):
         if isinstance(x, INode):
             return x
         return self.read_i_node(x)
 
-    def read_flags(self, x):
+    def read_flags(self, x: INode or int):
         inode = self.ensure_i_node(x)
         return inode.flags_string()
 
-    def read_block(self, blkn):
+    def read_block(self, blkn: int):
         self.f.seek(BLOCK_SIZE*blkn)
         data = self.f.read(BLOCK_SIZE)
         return data
 
-    def yield_node_blocks(self, node, include_all=False):
+    def yield_node_blocks(self, node: INode or int, include_all=False) -> int:
         node = self.ensure_i_node(node)
         if node.size > BIGGEST_NOT_HUGE_SIZE:
             raise HugeFileError('huge files not implemented')
@@ -217,43 +222,24 @@ class UnixV6FileSystem:
                     if n == 0: return
                     yield n
 
-    def read_file(self, node):
+    def read_file(self, node: INode or int):
         node = self.ensure_i_node(node)
         contents = b''
         for n in self.yield_node_blocks(node):
             contents += self.read_block(n)
         return contents[:node.size]
         
-        #node = self.ensure_i_node(args[0])
-        #if node.size > BIGGEST_NOT_HUGE_SIZE:
-        #    raise ValueError('huge files not implemented')
-        #contents = b''
-        #if not node.is_large():
-        #    for n in node.addr:
-        #        if n == 0: break
-        #        contents += self.read_block(n)
-        #else:
-        #    for blk in node.addr:
-        #        indirect_block = self.read_block(blk)
-        #        for i in range(0, len(indirect_block), 2):
-        #            n = struct.unpack('H', indirect_block[i:i+2])[0]
-        #            if n == 0: break
-        #            contents += self.read_block(n)
-        #        if n == 0: break
-        #contents = contents[:node.size]
-        #return contents
-
-    def sum_file(self, *args):
+    def sum_file(self, x: bytes or INode or int):
         '''
         This computes the same file checksum as Unix V6's `sum` utility.
 
         The algorithm of the checksum was explained by user `palupicu`:
             https://unix.stackexchange.com/a/526658/274235
         '''
-        if type(args[0])==bytes:
-            data = args[0]
+        if isinstance(x, bytes):
+            data = x
         else:
-            data = self.read_file(*args)
+            data = self.read_file(x)
         s = 0
         for c in data:
             s += c if c <= 0x7F else (c | 0xFF00)
@@ -331,9 +317,9 @@ class UnixV6FileSystem:
             local_fn = os.path.join(local_dir, uitem[0])
             self.download_file(uitem[3], local_fn)
             # Set the synced flags
-            #lmtime = int(os.stat(local_fn).st_mtime)
-            #uitem[3].modtime = SYNCED_BY_PYPDP11 | (0xFFFFFF & lmtime)
-            #self.write_i_node(uitem[3])
+            lmtime = int(os.stat(local_fn).st_mtime)
+            uitem[3].modtime = SYNCED_BY_PYPDP11 | (0xFFFFFF & lmtime)
+            self.write_i_node(uitem[3])
 
         def upload(litem, udir):
             print('UPLOAD: {} into {}'.format(litem[1], unix_dir))

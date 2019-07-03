@@ -15,7 +15,7 @@ from cons import Terminal, ostr
 from interrupt import Interrupt
 from disasm import DISASM_TABLE
 
-EXTRACTED_IMAGE = 'extracted.img'
+EXTRACTED_IMAGE_FILENAME = 'extracted.img'
 INT = Interrupt     # shorthand for Interrupt
 
 class Trap(Exception):
@@ -40,7 +40,7 @@ class PDP11:
     FLAGV = 2
     FLAGC = 1
 
-    BOOTROM = [
+    BOOTROM = [                          ## (PAL-11 assembly)
         0o042113,                        ## "KD" 
         0o012706, 0o2000,                ## MOV #boot_start, SP 
         0o012700, 0o000000,              ## MOV #unit, R0        ; unit number 
@@ -439,7 +439,7 @@ class PDP11:
     def panic(self, msg):
         self.writedebug('PANIC: ' + msg + '\n')
         self.printstate()
-        self.stop()
+        self.stop_cpu()
         raise Exception(msg)
 
     def interrupt(self, vec, pri):
@@ -474,12 +474,16 @@ class PDP11:
 
     def handleinterrupt(self, vec):
         # PyPDP11 interrupts
-        if vec == INT.LoadImage:
-            self.load_image()
-            return
-        elif vec == INT.ExtractImage:
-            self.extract_image() 
-            return
+        if vec & 0o400:
+            if vec == INT.LoadImage:
+                self.load_image()
+                return
+            elif vec == INT.ExtractImage:
+                self.extract_image() 
+                return
+            elif vec == INT.Synchronize:
+                self.sync() 
+                return
         # PDP-11 interrupts
         try:
             prev = self.PS
@@ -575,17 +579,23 @@ class PDP11:
         self.R[7] += o
 
     def extract_image(self):
-        # This function is called by the GUI
-        self.rk.save_image(EXTRACTED_IMAGE)
-        self.writedebug('Disk image saved to: {}\n'.format(EXTRACTED_IMAGE))
+        # Called on PyPDP11 interrupt
+        self.rk.save_image(EXTRACTED_IMAGE_FILENAME)
+        self.writedebug('Disk image saved to: {}\n'.format(EXTRACTED_IMAGE_FILENAME))
 
     def load_image(self):
-        # This function is called by the GUI
-        self.rk.load_image(EXTRACTED_IMAGE)
-        self.writedebug('Disk image loaded from file: {}\n'.format(EXTRACTED_IMAGE))
+        # Called on PyPDP11 interrupt
+        self.rk.load_image(EXTRACTED_IMAGE_FILENAME)
+        self.writedebug('Disk image loaded from file: {}\n'.format(EXTRACTED_IMAGE_FILENAME))
 
-    def sync(self, unix_dir, local_dir):
-        print (unix_dir, local_dir)
+    def sync(self):
+        # Called on PyPDP11 interrupt
+        unix_dir, local_dir = self.unix_dir, self.local_dir
+        print('Syncing:', unix_dir, local_dir)
+        try:
+            self.rk.sync(unix_dir, local_dir)
+        except Exception as e:
+            self.writedebug('FAILED TO SYNC: '+str(e))
 
     def step(self):
         #var val, val1, val2, ia, da, sa, d, s, l, r, o, max, maxp, msb;
@@ -1164,7 +1174,7 @@ class PDP11:
             if not self.curuser:
                 self.writedebug("HALT\n")
                 self.printstate()
-                self.stop()
+                self.stop_cpu()
                 return
         elif bits == 0o000001: # WAIT
             #time.sleep(0.001)
@@ -1238,6 +1248,7 @@ class PDP11:
     def stop_cpu(self):
         print('Stopping CPU...')
         self.clock_stop.set()
+        print('Stopping clock...')
         self.cpu_stop.set()
 
 if __name__=='__main__':

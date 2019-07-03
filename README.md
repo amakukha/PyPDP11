@@ -9,10 +9,13 @@ Example screenshots:
 <p align="center">
   <img
   src="https://github.com/amakukha/PyPDP11/raw/master/screenshots/Ken_Thompson_chess_1975_Unix_V5_PDP-11_emulator_for_Python_screenshot.png"
-  width="250" alt="PDP-11 emulator for Python 3. Playing with Ken Thompson's chess implementation in Version 6 Unix (1975).">
+  width="225" alt="PDP-11 emulator for Python 3. Playing with Ken Thompson's chess implementation in Version 6 Unix (1975).">
+  <img
+  src="https://github.com/amakukha/PyPDP11/raw/master/screenshots/Syncing_directory_PDP-11_emulator_Python_GUI_screenshot.png"
+  width="225" alt="PDP-11 emulator for Python 3. Syncing directory between Unix V6 and local filesystems.">
   <img
   src="https://github.com/amakukha/PyPDP11/raw/master/screenshots/TMG_in_TMGL_Doug_McIlroy_PDP-11_emulator_for_Python_screenshot.png"
-  width="250" alt="PDP-11 emulator for Python 3. Viewing code of Doug McIlroy's TMG in TMGL for Unix V6.">
+  width="225" alt="PDP-11 emulator for Python 3. Viewing code of Doug McIlroy's TMG in TMGL for Unix V6.">
 </p>
 
 ## Prerequisites
@@ -36,10 +39,9 @@ Note: Unix V6 used `chdir` command instead of `cd`. Issuing `stty -lcase` is nee
 Compared to the original JavaScript code, this implementation has the following benefits:
  - pasting text into the terminal from clipboard is allowed (making it much more usable)
  - resource friendlier `WAIT` instruction (not overheating the physical CPU)
+ - syncing a directory between Unix V6 and your machine
  - saving and loading the disk state
  - faster output 
-
-Syncing a directory between Unix V6 and your machine will be implemented in the near future.
 
 ## Where are the manuals?
 The disk image included into this repository misses on most
@@ -49,5 +51,5 @@ The disk image included into this repository misses on most
 It is unsurprising, knowing that RK05 disk could only contain around 2.5 MB of data, while the
 Unix V6 sources alone measure beyond that capacity.
 
-Complete UNIX V6 manual in searchable PDF can be found
+Complete Unix V6 manual in searchable PDF can be found
 [here](https://ia800600.us.archive.org/19/items/v6-manual/v6-manual.pdf).

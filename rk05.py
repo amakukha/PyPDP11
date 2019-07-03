@@ -8,6 +8,7 @@
 
 import time, array
 from interrupt import Interrupt
+from unix_v6_fs import UnixV6FileSystem
 
 class System:
     
@@ -47,11 +48,12 @@ class RK05:
         if len(self.disk) != RK05.EXPECTED_IMAGE_LENGTH:
             self.system.panic('unexpected image length {} != {}'.format(len(self.disk), RK05.EXPECTED_IMAGE_LENGTH))
         print ('Disk image loaded:', len(self.disk))
-        max_bytes = 0o313*0o14*2*512
-        if len(self.disk) < max_bytes:
-            extend_by = max_bytes - len(self.disk)
-            self.disk.extend(bytearray(extend_by*[0])) 
-            print (' - free space:', extend_by)
+        # TODO: extend image with free bytes, but also add those blocks to the free blocks chain
+        #max_bytes = 0o313*0o14*2*512        # 4872 blocks, 2494464 bytes
+        #if len(self.disk) < max_bytes:
+        #    extend_by = max_bytes - len(self.disk)
+        #    self.disk.extend(bytearray(extend_by*[0])) 
+        #    print (' - free space:', extend_by)
 
         # Position of the head
         self.drive = 0
@@ -66,6 +68,20 @@ class RK05:
 
     def load_image(self, filename):
         self.disk = bytearray(open(filename, 'rb').read())
+
+    def sync(self, unix_dir, local_dir):
+        # TODO: check if filesystem is locked
+        try:
+            hash0 = hash(bytes(self.disk))
+            fs = UnixV6FileSystem(bytes(self.disk))
+            fs.sync(unix_dir, local_dir)
+            fs.f.seek(0)
+            self.disk = bytearray(fs.f.read())
+            msg = 'Unix directory {} synced with local directory {}\n'.format(unix_dir, local_dir)
+            self.system.writedebug(msg)
+        except Exception as e:
+            raise e
+        return True
 
     def reset(self):
         # Reset registers to default values

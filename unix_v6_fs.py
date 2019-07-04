@@ -579,8 +579,11 @@ class UnixV6FileSystem:
                 fnode = None
                 dirpath = dst
                 dstname = os.path.split(src)[1]
+                fnode = self.path_i_node(os.path.join(dirpath, dstname))
+                if fnode:
+                    print('Overwriting file:', os.path.join(dirpath, dstname))
             else:
-                print('Overwriting file:', dst)
+                print('Overwriting:', dst)
         if dstname is None:
             dstname = os.path.split(dst)[1]
 
@@ -728,7 +731,7 @@ class UnixV6FileSystem:
     def integrity(self):
         blks = self.get_used_blocks()
         print('Max block:', max(blks))
-        print('Total blocks used:', len(blks))
+        print('Total blocks used:', len(blks))      # TODO: "du /" shows 3 blocks more being used than this
         sup = self.read_superblock()
         all_blocks = len(blks) + self.count_free_blocks() + sup.isize + 2
         print('Total blocks:', all_blocks)

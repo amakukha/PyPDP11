@@ -18,7 +18,7 @@ char **argv;
 					/* create output file */
 		if ((obuf[0] = creat(argv[2], 0666)) < 0) {
 			diag(argv[2]);
-			diag(": failed to create");
+			diag(": failed to create\n");
 			return;
 		}
 	}
@@ -44,7 +44,8 @@ char **argv;
 			if (c==' ' || c=='\n') {
 				b1 = token;
 				b2 = token >> 8;
-				if (lastc!=' ') {
+				if (lastc!=' ' && lastc!='\n') {
+					/* end of token */
 					if (sp>0) {
 						if (nfirst) putc(lastb2, obuf);
 						putc(b1, obuf);
@@ -54,10 +55,6 @@ char **argv;
 						/* first token in the line */
 						bytecnt = token;
 					}
-				} else {
-					/* " \n" -> end of file */
-					if (!(bytecnt & 1))
-						putc(lastb2, obuf);
 				}
 				if (c==' ') sp++;
 				else {
@@ -73,7 +70,12 @@ char **argv;
 			}
 			lastc = c;
 		}
+		if (!(bytecnt & 1)) {
+			putc(lastb2, obuf);
+			fflush(obuf);
+		}
 		close(ibuf[0]);
+		close(obuf[0]);
 	} else if (argc>1) {
 		diag(argv[1]);
 		diag(": cannot open\n");

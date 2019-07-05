@@ -122,7 +122,7 @@ class PDP11:
         self.R[7] = 0o2002
 
         self.terminal.request_reset()
-        self.rk.reset()
+        self.rk.reinit()
 
         self.running.set()
 
@@ -599,7 +599,7 @@ class PDP11:
         try:
             self.rk.sync(unix_dir, local_dir)
         except Exception as e:
-            self.writedebug('FAILED TO SYNC: '+str(e))
+            self.writedebug('FAILED TO SYNC: '+str(e)+'\n')
 
     def step(self):
         #var val, val1, val2, ia, da, sa, d, s, l, r, o, max, maxp, msb;

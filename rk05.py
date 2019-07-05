@@ -42,20 +42,13 @@ class RK05:
     
     def __init__(self, system):
         self.system = system
-       
+        #self.reinit()
+    
+    def reinit(self):
         # rkinit
         self.load_image(RK05.IMAGE_FILENAME)
-        if len(self.disk) != RK05.EXPECTED_IMAGE_LENGTH:
-            self.system.panic('unexpected image length {} != {}'.format(len(self.disk), RK05.EXPECTED_IMAGE_LENGTH))
-        print ('Disk image loaded:', len(self.disk))
-        # TODO: extend image with free bytes, but also add those blocks to the free blocks chain
-        #max_bytes = 0o313*0o14*2*512        # 4872 blocks, 2494464 bytes
-        #if len(self.disk) < max_bytes:
-        #    extend_by = max_bytes - len(self.disk)
-        #    self.disk.extend(bytearray(extend_by*[0])) 
-        #    print (' - free space:', extend_by)
-
-        # Position of the head
+       
+        # Current "physical" position of the head
         self.drive = 0
         self.sector = 0
         self.surface = 0
@@ -68,6 +61,15 @@ class RK05:
 
     def load_image(self, filename):
         self.disk = bytearray(open(filename, 'rb').read())
+        if len(self.disk) != RK05.EXPECTED_IMAGE_LENGTH:
+            self.system.panic('unexpected image length {} != {}'.format(len(self.disk), RK05.EXPECTED_IMAGE_LENGTH))
+        print ('Disk image loaded:', len(self.disk))
+        # TODO: extend image with free bytes, but also add those blocks to the free blocks chain
+        #max_bytes = 0o313*0o14*2*512        # 4872 blocks, 2494464 bytes
+        #if len(self.disk) < max_bytes:
+        #    extend_by = max_bytes - len(self.disk)
+        #    self.disk.extend(bytearray(extend_by*[0])) 
+        #    print (' - free space:', extend_by)
 
     def sync(self, unix_dir, local_dir):
         # TODO: check if filesystem is locked
@@ -174,6 +176,7 @@ class RK05:
     def go(self):
         op = (self.CS & 0xF) >> 1
         if op == 0:
+            self.system.writedebug('WARNING: resetting the drive via op == 0\n')
             self.reset()
         elif op == 1:
             self.notready()

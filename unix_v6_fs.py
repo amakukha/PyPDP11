@@ -5,7 +5,7 @@
 #     https://github.com/amakukha/PyPDP11
 # Copyright (c) 2019, Andriy Makukha, MIT Licence
 
-import struct, os, array, time, datetime, io
+import struct, os, array, time, datetime, io, string
 
 DISK_IMAGE_FILENAME = 'rk0.img'
 
@@ -278,14 +278,18 @@ class UnixV6FileSystem:
                 return self.path_i_node(tail, no)
         return None
 
-    def sync(self, unix_dir, local_dir):            # pathes are expected
+    def sync(self, unix_dir, local_dir, terminal=None):            # pathes are expected
         '''Synchronizes Unix V6 directory with a local directory.
-        The algorithm uses file modification timestamps.
+        The algorithm uses file modification timestamps for tracking changes.
         The highest byte of the timestamp is set to either 0x13 (CREATED) or 0x15 (SYNCED) by this script.
         The assumption is that if the highest byte is not one of those two, the file was created by or
         modified by Unix V6. A file modified by Unix is always downloaded to a local directory and its 
         highest byte is set to SYNCED. Otherwise, the file in Unix V6 can be overwritten if local directory
         contains a newer version (that is, different from already uploaded).
+
+        Downloading a file accesses it directly in Unix V6 filesystem. Uploading a file either puts it
+        directly into filesystem if Unix was not loaded yet or takes over the terminal and executes
+        necessary commands to create identical file through the operating system.
 
         This method is based on my directoried comparing script: 
             https://gist.github.com/amakukha/f489cbde2afd32817f8e866cf4abe779
@@ -312,8 +316,14 @@ class UnixV6FileSystem:
 
         # Synchronize current dirrectory
 
+        def show_message(msg):
+            if terminal is None:
+                print(msg)
+            else:
+                terminal.writedebug(msg + '\n')
+
         def download(uitem, ldir):
-            print('DOWNLOAD: {} into {}'.format(uitem[1], local_dir))
+            show_message('DOWNLOAD: {} into {}'.format(uitem[1], local_dir))
             local_fn = os.path.join(local_dir, uitem[0])
             self.download_file(uitem[3], local_fn)
             # Set the synced flags
@@ -322,8 +332,12 @@ class UnixV6FileSystem:
             self.write_i_node(uitem[3])
 
         def upload(litem, udir):
-            print('UPLOAD: {} into {}'.format(litem[1], unix_dir))
-            node = self.upload_file(litem[1], os.path.join(unix_dir, litem[0]))
+            show_message('UPLOAD: {} into {}'.format(litem[1], unix_dir))
+            dst_fn = os.path.join(unix_dir, litem[0])
+            #if terminal is None or terminal.prompt_cnt == 0:
+            node = self.upload_file(litem[1], dst_fn)
+            #else:
+            #    node = self.upload_via_command_line(litem[1], dst_fn, terminal)
             # Set the local time
             lmtime = int(os.stat(litem[1]).st_mtime)
             node.modtime = SYNCED_BY_PYPDP11 | (0xFFFFFF & lmtime)
@@ -363,7 +377,7 @@ class UnixV6FileSystem:
                 li += 1
             cnt += 1
 
-        # TODO: DRY
+        # TODO: repeating code, DRY it
         while ui < len(ufs):
             if ufs[ui][2]:
                 sync_subdirs.append((ufs[ui][1], os.path.join(local_dir, ufs[ui][0])))
@@ -381,7 +395,7 @@ class UnixV6FileSystem:
 
         # Sync subfolders recursively
         for udir, ldir in sync_subdirs:
-            cnt += self.sync(udir, ldir)
+            cnt += self.sync(udir, ldir, terminal)
        
         return cnt
 
@@ -568,6 +582,43 @@ class UnixV6FileSystem:
         node = self.ensure_i_node(node)
         data = self.read_file(node)
         open(dst, 'wb').write(data)
+
+    def upload_via_command_line(self, src: str, dst: str, terminal):
+        # Retrieve file from the local filesystem
+        if not os.path.exists(src):
+            raise ValueError("file {} doesn't exist".format(src))
+
+        print(repr(dst), dst)
+
+        # Determine if file can be echoed
+        contents = open(src,'rb').read()
+        lines = contents.split(b'\n')
+        allowed = string.ascii_letters + string.digits + ' .,;:"\'`+-*/%=!?~$^&|\\()[]{}<>\n'
+        max_len = 255 - len(" echo \"\" >> \n" + dst)
+        if contents[-1:]==b'\n' and \
+           max(len(x) for x in lines) <= max_len and \
+           not [x for x in lines if b"'" in x and b'"' in x] and \
+           set(contents).issubset(set(allowed.encode())):
+            # File can be input via echo command
+            first = True
+            for line in lines:
+                terminal.queue_command(" echo {q}{line}{q} {a} {fn}".format(
+                    q = "'" if b'"' in line else '"',
+                    line = line.decode(),
+                    a = ' >' if first else '>>',
+                    fn = dst
+                ), self.prompt_callback)
+                first = False
+        else:
+            del lines, contents
+            # od -h src | sed 's/[ ][ ]*/ /g'
+            raise SyncError("file cannot be echoed")
+
+        return self.path_i_node(dst)
+
+    def prompt_callback(self, last_printed):
+        print("Command finished")
+        pass
 
     def upload_file(self, src: str, dst: str):
         fnode = self.path_i_node(dst)      # inode of the file to be overwritten

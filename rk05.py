@@ -76,7 +76,7 @@ class RK05:
         try:
             hash0 = hash(bytes(self.disk))
             fs = UnixV6FileSystem(bytes(self.disk))
-            fs.sync(unix_dir, local_dir)
+            fs.sync(unix_dir, local_dir, self.system.terminal)
             fs.f.seek(0)
             self.disk = bytearray(fs.f.read())
             msg = 'Unix directory {} synced with local directory {}\n'.format(unix_dir, local_dir)

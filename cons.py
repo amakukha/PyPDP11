@@ -73,6 +73,11 @@ class Terminal(ttk.Frame):
         self.control_pressed = False
         self.start_commands = []            # additional start commands
 
+        # Automated command execution
+        self.command_queue = queue.Queue()
+        self.command_callback = None
+        self.executing_command = False
+
         self.pastebuff = []
         self.system = system
         self.setup()
@@ -160,6 +165,8 @@ class Terminal(ttk.Frame):
             self.paste(self.start_commands[self.prompt_cnt-2])
         else:
             self.paste('stty -lcase\n')
+            #self.queue_command('stty -lcase', None)
+
 
     def start_action(self):
         self.manual_start = False
@@ -191,7 +198,8 @@ class Terminal(ttk.Frame):
         if not clipboard:
             return
         self.keybuff_lock.acquire()
-        self._addchar(clipboard.pop(0))
+        if not (self.TKS & 0x80):
+            self._addchar(clipboard.pop(0))
         self.pastebuff.extend(clipboard)
         self.keybuff_lock.release()
 
@@ -267,12 +275,12 @@ class Terminal(ttk.Frame):
         self.keybuff_lock.acquire()
 
         self.TKS = 0
-        self.TPS = 1<<7
+        self.TPS = 0x80
         self.keybuf = 0
 
         # GUI little features
         self.manual_start = True        # started manually or with "Start routine"?
-        self.last_printed = ''          # last three characters printed by OS
+        self.last_printed = ''          # last characters printed by OS
         self.prompt_cnt = 0             # how many times OS outputed prompt
         self.reset_requested = False
 
@@ -287,7 +295,7 @@ class Terminal(ttk.Frame):
         self.console.clear()
 
         self.TKS = 0
-        self.TPS = 1<<7
+        self.TPS = 0x80
         #self.T = 0  # mistake in original code?
 
     def writedebug(self, msg):
@@ -311,24 +319,44 @@ class Terminal(ttk.Frame):
             # Add text to the terminal
             self.console.print(message)
             self.master.update_idletasks()
+        elif not self.executing_command and not self.command_queue.empty() and not self.pastebuff:
+            cc = self.command_queue.get()
+            self.execute_command(*cc)
         if self.reset_requested:
             self.reset()
         self.master.after(GUI_MSPF, self.process_queue)
 
-    def add_to_write_queue(self, msg):   # terminal
-        # This is called by the CPU thread
-        self.queue.put(msg)
-        self.last_printed = self.last_printed[-1:]+msg 
-        if self.last_printed == '# ':
+    def queue_command(self, command, callback):
+        # This is called by the CPU thread (from RK05)
+        print('Queueing command:',command)
+        self.command_queue.put((command, callback))
+
+    def execute_command(self, command, callback):
+        # This is called by the GUI thread
+        self.executing_command = True
+        self.paste(command)
+        if command.rstrip(' \t')[-1:]!='\n':
+            self.paste('\n')
+        self.command_callback = callback
+
+    def add_to_write_queue(self, char):   # terminal
+        # This is called by the CPU thread (from conswrite16)
+        self.queue.put(char)
+        self.last_printed = self.last_printed[-1000:] + char
+        if self.last_printed[-2:] == '# ':
             self.prompt_cnt += 1
             if self.prompt_cnt < 2+len(self.start_commands) and not self.manual_start:
                 self.start_action()
+            if self.command_callback is not None:
+                if self.command_callback(self.last_printed):
+                    self.command_callback = None
+            self.executing_command = False
 
     def _addchar(self, c):
         # This is called by the GUI thread
         self.TKS |= 0x80
         self.keybuf = c
-        if self.TKS & (1<<6):
+        if self.TKS & 0x40:
             self.system.interrupt(Interrupt.TTYIN, 4)
 
 #    def _specialchar(self, c):
@@ -342,7 +370,7 @@ class Terminal(ttk.Frame):
 #        else:
 #            return
 #        self.TKS |= 0x80
-#        if self.TKS & (1<<6):
+#        if self.TKS & 0x40:
 #            self.system.interrupt(Interrupt.TTYIN, 4)
 
     def _getchar(self):
@@ -378,15 +406,15 @@ class Terminal(ttk.Frame):
     def conswrite16(self, a, v):
         # This is called by the CPU thread
         if a == 0o777560:
-            if v & (1<<6):
-                self.TKS |= 1<<6
+            if v & 0x40:
+                self.TKS |= 0x40
             else:
-                self.TKS &= ~(1<<6)
+                self.TKS &= ~0x40
         elif a == 0o777564:
-            if v & (1<<6):
-                self.TPS |= 1<<6
+            if v & 0x40:
+                self.TPS |= 0x40
             else:
-                self.TPS &= ~(1<<6)
+                self.TPS &= ~0x40
         elif a == 0o777566:
             v &= 0xFF       # TODO: why does it send '0x8D' sometimes?
             if not (self.TPS & 0x80):
@@ -396,7 +424,7 @@ class Terminal(ttk.Frame):
             else: 
                 self.add_to_write_queue(chr(v & 0x7F))
             self.TPS &= 0xff7f
-            if self.TPS & (1<<6):
+            if self.TPS & 0x40:
                 #//setTimeout("TPS |= 0x80; interrupt(INTTTYOUT, 4);", 1);
                 self.TPS |= 0x80
                 self.system.interrupt(Interrupt.TTYOUT, 4)
@@ -407,5 +435,8 @@ class Terminal(ttk.Frame):
             system.panic("write to invalid address " + ostr(a,6));
 
     def _show_ips(self):
-        self.ips_label.config(text='IPS ={:-4.0f}K'.format(self.ips/1000))
+        if self.ips>9999:
+            self.ips_label.config(text='IPS ={:-4.0f}K'.format(self.ips/1000))
+        else:
+            self.ips_label.config(text='IPS ={:-5d}'.format(self.ips))
         self.master.after(1000, self._show_ips)

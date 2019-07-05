@@ -204,10 +204,10 @@ class PDP11:
                 self.memory[a>>1] = v
             except OverflowError as e:      # dirty fix of a problem
                 if v < 0:
-                    self.writedebug("warning: negative value @ physwrite16\n")
+                    #self.writedebug("warning: negative value @ physwrite16\n")     # TODO: clean it up so that it doesn happen
                     self.memory[a>>1] = v & 0xFFFF
                 elif v > 0xFFFF:
-                    self.writedebug("warning: short overflow @ physwrite16\n")
+                    #self.writedebug("warning: short overflow @ physwrite16\n")     # TODO: clean it up so that it doesn happen
                     self.memory[a>>1] = v & 0xFFFF
                 else:
                     raise e

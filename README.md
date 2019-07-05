@@ -35,6 +35,9 @@ python3 -c 'import tkinter; print(tkinter.TclVersion)'
 
 Note: Unix V6 used `chdir` command instead of `cd`. Issuing `stty -lcase` is needed to enable lowercase output.
 
+Before syncing files from Unix V6 into your local directory, need to issue the "sync" command (flushes delayed I/O to disk).
+Syncing files into the Unix V6 filesystem should be done before Unix is loaded (e.g., after a reset).
+
 ## What's new
 Compared to the original JavaScript code, this implementation has the following benefits:
  - pasting text into the terminal from clipboard is allowed (making it much more usable)

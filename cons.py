@@ -105,6 +105,8 @@ class Terminal(ttk.Frame):
         #self.center.grid_rowconfigure(0, weight=1)
         #self.center.grid_columnconfigure(0, weight=1)
 
+        self.master.bind('<FocusOut>', self.focus_out)
+
         self.console = ReadOnlyText(self.master, self.center, height = 25, width = 89, fg='#04fe7c',
                                     bg='#292929', font = ('Courier New', 15))
         self.console.grid(row=0, column=0, sticky=ALL_SIDES)
@@ -210,6 +212,12 @@ class Terminal(ttk.Frame):
             (False, True): 'COMM',
             (True,  True): 'CT+CO',
         }[(self.control_pressed, self.meta_pressed)])
+
+    def focus_out(self, event):
+        if self.meta_pressed or self.control_pressed:
+            self.meta_pressed = False
+            self.control_pressed = False
+            self.update_ctrl()
 
     def key_release(self, event):
         if event.keysym in ['Meta_L', 'Control_L']:
@@ -328,7 +336,6 @@ class Terminal(ttk.Frame):
 
     def queue_command(self, command, callback):
         # This is called by the CPU thread (from RK05)
-        print('Queueing command:',command)
         self.command_queue.put((command, callback))
 
     def execute_command(self, command, callback):

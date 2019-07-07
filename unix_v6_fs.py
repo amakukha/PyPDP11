@@ -5,7 +5,7 @@
 #     https://github.com/amakukha/PyPDP11
 # Copyright (c) 2019, Andriy Makukha, MIT Licence
 
-import struct, os, array, time, datetime, io, string
+import struct, os, array, time, datetime, io, string, threading, base64
 
 DISK_IMAGE_FILENAME = 'rk0.img'
 
@@ -17,6 +17,8 @@ BIGGEST_NOT_HUGE_SIZE = BLOCK_SIZE*BLOCK_SIZE/2*8
 # Higher bytes of file modtime used by PyPDP11 for syncing and creating
 CREATED_BY_PYPDP11 = 0x13000000         # all in 1980
 SYNCED_BY_PYPDP11  = 0x15000000         # all in 1981
+
+TMP_FILENAME = 'tmp.b64'
 
 # TODO:
 # - check that all the non-free nodes (according to the chain) are actually used 
@@ -278,7 +280,7 @@ class UnixV6FileSystem:
                 return self.path_i_node(tail, no)
         return None
 
-    def sync(self, unix_dir, local_dir, terminal=None):            # pathes are expected
+    def sync(self, unix_dir: 'path', local_dir: 'path', terminal=None, root=True):
         '''Synchronizes Unix V6 directory with a local directory.
         The algorithm uses file modification timestamps for tracking changes.
         The highest byte of the timestamp is set to either 0x13 (CREATED) or 0x15 (SYNCED) by this script.
@@ -311,8 +313,8 @@ class UnixV6FileSystem:
         lfs = [(fn, os.path.join(local_dir, fn)) for fn in os.listdir(local_dir)]
 
         # Determine type
-        ufs = sorted([(fn, pth, node.is_dir(), node) for fn, pth, node in ufs if fn not in '..'])
-        lfs = sorted([(fn, pth, os.path.isdir(pth)) for fn, pth in lfs])
+        ufs = sorted([(fn, pth, node.is_dir(), node) for fn, pth, node in ufs if fn[0]!='.'])
+        lfs = sorted([(fn, pth, os.path.isdir(pth)) for fn, pth in lfs if fn[0]!='.'])
 
         # Synchronize current dirrectory
 
@@ -331,17 +333,20 @@ class UnixV6FileSystem:
             uitem[3].modtime = SYNCED_BY_PYPDP11 | (0xFFFFFF & lmtime)
             self.write_i_node(uitem[3])
 
+        via_command_line = False
         def upload(litem, udir):
+            nonlocal via_command_line
             show_message('UPLOAD: {} into {}'.format(litem[1], unix_dir))
             dst_fn = os.path.join(unix_dir, litem[0])
-            #if terminal is None or terminal.prompt_cnt == 0:
-            node = self.upload_file(litem[1], dst_fn)
-            #else:
-            #    node = self.upload_via_command_line(litem[1], dst_fn, terminal)
-            # Set the local time
-            lmtime = int(os.stat(litem[1]).st_mtime)
-            node.modtime = SYNCED_BY_PYPDP11 | (0xFFFFFF & lmtime)
-            self.write_i_node(node)
+            if terminal is None or terminal.prompt_cnt == 0:
+                node = self.upload_file(litem[1], dst_fn)
+                # Set the local time
+                lmtime = int(os.stat(litem[1]).st_mtime)
+                node.modtime = SYNCED_BY_PYPDP11 | (0xFFFFFF & lmtime)
+                self.write_i_node(node)
+            else:
+                via_command_line = True
+                self.upload_via_command_line(litem[1], dst_fn, terminal)
 
         ui = li = cnt = 0
         sync_subdirs = []
@@ -395,9 +400,18 @@ class UnixV6FileSystem:
 
         # Sync subfolders recursively
         for udir, ldir in sync_subdirs:
-            cnt += self.sync(udir, ldir, terminal)
+            cnt, via_comm = self.sync(udir, ldir, terminal, root=False)
+            via_command_line = via_command_line or via_comm
+
+        if root and terminal:
+            if via_command_line:
+                terminal.queue_command('rm '+TMP_FILENAME, self.prompt_callback)
+                terminal.queue_command('sync', self.prompt_callback)
+                terminal.queue_command('echo "Syncing finished"', self.prompt_callback)
+            else:
+                terminal.writedebug('Syncing finished\n')
        
-        return cnt
+        return cnt if root else (cnt, via_command_line)
 
 
     def tree(self, inum, save_path=None, tabs=0):
@@ -584,40 +598,46 @@ class UnixV6FileSystem:
         open(dst, 'wb').write(data)
 
     def upload_via_command_line(self, src: str, dst: str, terminal):
+        print(repr(dst), dst)
         # Retrieve file from the local filesystem
         if not os.path.exists(src):
             raise ValueError("file {} doesn't exist".format(src))
 
-        print(repr(dst), dst)
-
         # Determine if file can be echoed
+        text_file = True
         contents = open(src,'rb').read()
         lines = contents.split(b'\n')
         allowed = string.ascii_letters + string.digits + ' .,;:"\'`+-*/%=!?~$^&|\\()[]{}<>\n'
         max_len = 255 - len(" echo \"\" >> \n" + dst)
-        if contents[-1:]==b'\n' and \
+        if not (contents[-1:]==b'\n' and \
            max(len(x) for x in lines) <= max_len and \
            not [x for x in lines if b"'" in x and b'"' in x] and \
-           set(contents).issubset(set(allowed.encode())):
-            # File can be input via echo command
-            first = True
-            for line in lines:
-                terminal.queue_command(" echo {q}{line}{q} {a} {fn}".format(
-                    q = "'" if b'"' in line else '"',
-                    line = line.decode(),
-                    a = ' >' if first else '>>',
-                    fn = dst
-                ), self.prompt_callback)
-                first = False
-        else:
-            del lines, contents
-            # od -h src | sed 's/[ ][ ]*/ /g'
-            raise SyncError("file cannot be echoed")
+           set(contents).issubset(set(allowed.encode()))):
+            # Dump the file
+            text_file = False
+            contents = base64.standard_b64encode(contents)
+            lines = [contents[i:i+64] for i in range(0, len(contents), 64)]
+
+        # Input via echo command
+        first = True
+        for line in lines:
+            terminal.queue_command("echo {q}{line}{q} {a} {fn}".format(
+                q = "'" if b'"' in line else '"',
+                line = line.decode(),
+                a = ' >' if first else '>>',
+                fn = TMP_FILENAME if not text_file else dst
+            ), self.prompt_callback)
+            first = False
+        if not text_file:
+            if lines:
+                terminal.queue_command('base64 -D -i "{}" -o "{}"'.format(TMP_FILENAME, dst), self.prompt_callback)
+            else:
+                # File is empty
+                terminal.queue_command('touch "{}"'.format(dst), self.prompt_callback)
 
         return self.path_i_node(dst)
 
     def prompt_callback(self, last_printed):
-        print("Command finished")
         pass
 
     def upload_file(self, src: str, dst: str):

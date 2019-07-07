@@ -35,8 +35,9 @@ python3 -c 'import tkinter; print(tkinter.TclVersion)'
 
 Note: Unix V6 used `chdir` command instead of `cd`. Issuing `stty -lcase` is needed to enable lowercase output.
 
-Before syncing files from Unix V6 into your local directory, need to issue the "sync" command (flushes delayed I/O to disk).
-Syncing files into the Unix V6 filesystem should be done before Unix is loaded (e.g., after a reset).
+Don't forget to issue the `sync` command before saving the disk state or syncing 
+files from a live Unix V6 into your local directory. (The `sync` command flushes
+delayed I/O, saves inodes and the superblock to disk.)
 
 ## What's new
 Compared to the original JavaScript code, this implementation has the following benefits:
@@ -45,6 +46,7 @@ Compared to the original JavaScript code, this implementation has the following 
  - syncing a directory between Unix V6 and your machine
  - saving and loading the disk state
  - faster output 
+ - some commands are backported and included into the image (see [tools](https://github.com/amakukha/PyPDP11/tree/master/tools) directory)
 
 ## Where are the manuals?
 The disk image included into this repository misses on most
@@ -54,5 +56,5 @@ The disk image included into this repository misses on most
 It is unsurprising, knowing that RK05 disk could only contain around 2.5 MB of data, while the
 Unix V6 sources alone measure beyond that capacity.
 
-Complete Unix V6 manual in searchable PDF can be found
+Complete Unix V6 manual in somewhat searchable PDF can be found
 [here](https://ia800600.us.archive.org/19/items/v6-manual/v6-manual.pdf).

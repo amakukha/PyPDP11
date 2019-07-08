@@ -442,9 +442,9 @@ class UnixV6FileSystem:
 
         if root and terminal:
             if via_terminal:
-                self.command_wait('rm "{}" 2>/dev/null'.format(TMP_FILENAME), terminal)
+                self.command_wait('rm "{}" >/dev/null'.format(TMP_FILENAME), terminal)
+                self.command_wait('date 1010123475', terminal)      # go back in time
                 self.command_wait('sync', terminal)
-            # sync finished @ FS
 
         return cnt if root else (cnt, via_terminal)
 

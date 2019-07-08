@@ -35,6 +35,8 @@ python3 -c 'import tkinter; print(tkinter.TclVersion)'
 
 Note: Unix V6 used `chdir` command instead of `cd`. Issuing `stty -lcase` is needed to enable lowercase output.
 
+Don't forget to issue the `sync` command before exporting the disk image (it flushes the delayed I/O to disk).
+
 ## What's new
 Compared to the original JavaScript code, this implementation has the following benefits:
  - pasting text into the terminal from clipboard is allowed (making it much more usable)

@@ -105,8 +105,10 @@ class RK05:
             # Replace current disk image with the synced one if Unix is not live
             if self.system.terminal.prompt_cnt == 0:
                 self.fs.f.seek(0)
-                self.disk = bytearray(self.fs.f.read())
-                self.system.writedebug('Disk image replaced with a synced one\n')
+                disk = self.fs.f.read()
+                if hash(disk_snapshot) != hash(disk) and disk_snapshot != disk:
+                    self.disk = bytearray(disk)
+                    self.system.writedebug('Disk image replaced with a synced one\n')
 
             msg = 'Unix directory {} synced with local directory {}\n'.format(self._unix_dir, self._local_dir)
             self.system.writedebug(msg)

@@ -19,6 +19,8 @@ CREATED_BY_PYPDP11 = 0x13000000         # all in 1980
 SYNCED_BY_PYPDP11  = 0x15000000         # all in 1981
 
 TMP_FILENAME = 'tmp.b64'
+TIME_DELTA = 60
+TIME_ERROR_S = 47                       # it's unclear why the difference appears to be 47 on my machine TODO
 
 # TODO:
 # - check that all the non-free nodes (according to the chain) are actually used 
@@ -304,6 +306,16 @@ class UnixV6FileSystem:
     def sync_prompt(self, last_printed):
         self.sync_running.set()
 
+    @staticmethod
+    def synctime(local_fn):
+        '''Get modtime of a local file. If modtime is not divisible by 60, truncate to minute.'''
+        lmtime = int(os.stat(local_fn).st_mtime)
+        if lmtime % 60:
+            latime = int(os.stat(local_fn).st_atime)
+            lmtime = lmtime - lmtime % 60
+            os.utime(local_fn, (latime, lmtime))
+        return SYNCED_BY_PYPDP11 | (0xFFFFFF & lmtime)
+
     def sync(self, unix_dir: 'path', local_dir: 'path', terminal=None, root=True):
         '''Synchronizes Unix V6 directory with a local directory.
         The algorithm uses file modification timestamps for tracking changes.
@@ -348,29 +360,31 @@ class UnixV6FileSystem:
             else:
                 terminal.writedebug(msg + '\n')
 
+        via_terminal = False
         def download(uitem, ldir):
             show_message('DOWNLOAD: {} into {}'.format(uitem[1], local_dir))
             local_fn = os.path.join(local_dir, uitem[0])
             self.download_file(uitem[3], local_fn)
             # Set the synced flags
-            lmtime = int(os.stat(local_fn).st_mtime)
-            uitem[3].modtime = SYNCED_BY_PYPDP11 | (0xFFFFFF & lmtime)
-            self.write_i_node(uitem[3])
+            if terminal is None or terminal.prompt_cnt == 0:
+                uitem[3].modtime = self.synctime(local_fn)
+                self.write_i_node(uitem[3])
+            else:
+                via_terminal = True
+                self.mark_synced_via_terminal(local_fn, uitem[1], terminal)
 
-        via_command_line = False
         def upload(litem, udir):
-            nonlocal via_command_line
+            nonlocal via_terminal
             show_message('UPLOAD: {} into {}'.format(litem[1], unix_dir))
             dst_fn = os.path.join(unix_dir, litem[0])
             if terminal is None or terminal.prompt_cnt == 0:
                 node = self.upload_file(litem[1], dst_fn)
                 # Set the local time
-                lmtime = int(os.stat(litem[1]).st_mtime)
-                node.modtime = SYNCED_BY_PYPDP11 | (0xFFFFFF & lmtime)
+                node.modtime = self.synctime(litem[1])
                 self.write_i_node(node)
             else:
-                via_command_line = True
-                self.upload_via_command_line(litem[1], dst_fn, terminal)
+                via_terminal = True
+                self.upload_via_terminal(litem[1], dst_fn, terminal)
 
         ui = li = cnt = 0
         sync_subdirs = []
@@ -384,10 +398,9 @@ class UnixV6FileSystem:
                         umtime = ufs[ui][3].modtime
                         lmtime = int(os.stat(lfs[li][1]).st_mtime)
                         if (umtime & 0xFF000000) not in [CREATED_BY_PYPDP11, SYNCED_BY_PYPDP11]:
-                            print('MODIFIED IN UNIX:')
                             download(ufs[ui], local_dir)
-                        elif (umtime & 0xFFFFFF) != (lmtime & 0xFFFFFF):
-                            print('MODIFIED LOCALLY:')
+                        elif abs((umtime & 0xFFFFFF) - (lmtime & 0xFFFFFF) + TIME_ERROR_S)>TIME_DELTA:
+                            print('Time difference {}'.format((umtime & 0xFFFFFF) - (lmtime & 0xFFFFFF)))
                             upload(lfs[li], unix_dir)
                 else:
                     raise SyncError('type mismatch: {} and {}'.format(ufs[ui][1], lfs[li][1]))
@@ -425,21 +438,15 @@ class UnixV6FileSystem:
         # Sync subfolders recursively
         for udir, ldir in sync_subdirs:
             cnt, via_comm = self.sync(udir, ldir, terminal, root=False)
-            via_command_line = via_command_line or via_comm
+            via_terminal = via_terminal or via_comm
 
         if root and terminal:
-            if via_command_line:
-                self.sync_running.clear()
-                terminal.queue_command('rm '+TMP_FILENAME, self.sync_prompt)
-                self.sync_running.wait()
-
-                self.sync_running.clear()
-                terminal.queue_command('sync', self.sync_prompt)
-                self.sync_running.wait()
+            if via_terminal:
+                self.command_wait('rm "{}" 2>/dev/null'.format(TMP_FILENAME), terminal)
+                self.command_wait('sync', terminal)
             # sync finished @ FS
 
-        return cnt if root else (cnt, via_command_line)
-
+        return cnt if root else (cnt, via_terminal)
 
     def tree(self, inum, save_path=None, tabs=0):
         '''Prints subdirectory tree to standard output.
@@ -624,8 +631,23 @@ class UnixV6FileSystem:
         data = self.read_file(node)
         open(dst, 'wb').write(data)
 
-    def upload_via_command_line(self, src: str, dst: str, terminal):
-        print(repr(dst), dst)
+    def command_wait(self, command: str, terminal):
+        '''Send command to terminal and wait for prompt'''
+        self.sync_running.clear()
+        terminal.queue_command(command, self.sync_prompt)
+        self.sync_running.wait()
+
+    def mark_synced_via_terminal(self, local_fn: 'path', unix_fn: 'path', terminal):
+        '''Syncs modtime of a Unix file to indicate that it is synced with a local file'''
+        modtime = self.synctime(local_fn) 
+        tz_offset = 18000
+        date = datetime.datetime.utcfromtimestamp(modtime-tz_offset).strftime('%m%d%H%M%y')
+        self.command_wait('date {}'.format(date), terminal)
+        
+        # Touch to set modtime (or to create at the same time)
+        self.command_wait('touch "{}"'.format(unix_fn), terminal)
+
+    def upload_via_terminal(self, src: str, dst: str, terminal):
         # Retrieve file from the local filesystem
         if not os.path.exists(src):
             raise ValueError("file {} doesn't exist".format(src))
@@ -634,39 +656,36 @@ class UnixV6FileSystem:
         text_file = True
         contents = open(src,'rb').read()
         lines = contents.split(b'\n')
-        allowed = string.ascii_letters + string.digits + ' .,;:"\'`+-*/%=!?~$^&|\\()[]{}<>\n'
+        allowed_characters = string.ascii_letters + string.digits + ' .,;:"\'`+-*/%=!?~$^&|\\()[]{}<>\n'
         max_len = 255 - len(" echo \"\" >> \n" + dst)
         if not (contents[-1:]==b'\n' and \
-           max(len(x) for x in lines) <= max_len and \
-           not [x for x in lines if b"'" in x and b'"' in x] and \
-           set(contents).issubset(set(allowed.encode()))):
+                max(len(x) for x in lines) <= max_len and \
+                not [x for x in lines if b"'" in x and b'"' in x] and \
+                set(contents).issubset(set(allowed_characters.encode()))):
             # Dump the file
             text_file = False
             contents = base64.standard_b64encode(contents)
             lines = [contents[i:i+64] for i in range(0, len(contents), 64)]
+        else:
+            lines = lines[:-1]      # drop the last empty line
 
         # Input via echo command
         first = True
         for line in lines:
-            self.sync_running.clear()
-            terminal.queue_command("echo {q}{line}{q} {a} {fn}".format(
+            self.command_wait("echo {q}{line}{q} {a} {fn}".format(
                 q = "'" if b'"' in line else '"',
                 line = line.decode(),
                 a = ' >' if first else '>>',
                 fn = TMP_FILENAME if not text_file else dst
-            ), self.sync_prompt)
-            self.sync_running.wait()
+            ), terminal)
             first = False
-        if not text_file:
-            if lines:
-                self.sync_running.clear()
-                terminal.queue_command('base64 -D -i "{}" -o "{}"'.format(TMP_FILENAME, dst), self.sync_prompt)
-                self.sync_running.wait()
-            else:
-                # File is empty
-                self.sync_running.clear()
-                terminal.queue_command('touch "{}"'.format(dst), self.sync_prompt)
-                self.sync_running.wait()
+
+        # Decode if needed
+        if not text_file and lines:
+            self.command_wait('base64 -D -i "{}" -o "{}"'.format(TMP_FILENAME, dst), terminal)
+
+        # Mark file as synced (or create at the same time)
+        self.mark_synced_via_terminal(src, dst, terminal)
 
         return self.path_i_node(dst)
 

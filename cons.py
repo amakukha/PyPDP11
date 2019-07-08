@@ -339,7 +339,6 @@ class Terminal(ttk.Frame):
 
     def queue_command(self, command, callback):
         # This is called by the CPU thread (from RK05)
-        print('Queueing:', command)
         self.command_queue.put((command, callback))
 
     def execute_command(self, command, callback):

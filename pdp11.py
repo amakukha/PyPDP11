@@ -597,7 +597,7 @@ class PDP11:
         unix_dir, local_dir = self.unix_dir, self.local_dir
         print('Syncing:', unix_dir, local_dir)
         try:
-            self.rk.sync(unix_dir, local_dir)
+            self.rk.start_sync_thread(unix_dir, local_dir)
         except Exception as e:
             self.writedebug('FAILED TO SYNC: '+str(e)+'\n')
 

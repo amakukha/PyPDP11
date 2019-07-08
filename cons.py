@@ -169,23 +169,26 @@ class Terminal(ttk.Frame):
             self.paste('stty -lcase\n')
             #self.queue_command('stty -lcase', None)
 
-
     def start_action(self):
         self.manual_start = False
         self.start_routine()
 
     def extract_action(self):
+        self.first = None       # do not autostart Unix
         self.system.interrupt(Interrupt.ExtractImage, 1)
 
     def load_action(self):
+        self.first = None       # do not autostart Unix
         self.system.interrupt(Interrupt.LoadImage, 1)
 
     def sync_action(self):
+        self.first = None       # do not autostart Unix
         self.system.unix_dir = self.sync1_entry.get()
         self.system.local_dir = self.sync2_entry.get()
         self.system.interrupt(Interrupt.Synchronize, 1)
 
     def reset_action(self):
+        self.first = None       # do not autostart Unix
         self.system.interrupt(Interrupt.Reset, 1)
 
     def paste(self, what=''):
@@ -336,6 +339,7 @@ class Terminal(ttk.Frame):
 
     def queue_command(self, command, callback):
         # This is called by the CPU thread (from RK05)
+        print('Queueing:', command)
         self.command_queue.put((command, callback))
 
     def execute_command(self, command, callback):

@@ -6,7 +6,7 @@
 # (c) 2019, Andriy Makukha, ported to Python 3, MIT License
 # Version 6 Unix (in the disk image) is available under the four-clause BSD license.
 
-import time, array
+import time, array, threading
 from interrupt import Interrupt
 from unix_v6_fs import UnixV6FileSystem
 
@@ -71,19 +71,51 @@ class RK05:
         #    self.disk.extend(bytearray(extend_by*[0])) 
         #    print (' - free space:', extend_by)
 
-    def sync(self, unix_dir, local_dir):
+    def start_sync_thread(self, unix_dir: 'path', local_dir: 'path'):
+        self._unix_dir = unix_dir
+        self._local_dir = local_dir
+        
+        self.sync_running = threading.Event()
+        self.sync_finished = threading.Event()
+        self.sync_finished.clear()
+
+        self.sync_thread = threading.Thread(target=self.sync_method)
+        self.sync_thread.daemon = True
+        self.sync_thread.start()
+
+    def sync_method(self):
+        '''The purpose of this thread is to:
+        1) exectute `sync` command before taking the filesystem snapshot
+        2) pass the syncing work to the filesystem class using that snapshot
+        3) wait for the syncing to finish, then take modified filesystem and replace the current one if Unix is not live
+        '''
+        if self.system.terminal.prompt_cnt > 0:
+            self.sync_running.clear()
+            self.system.terminal.queue_command('sync', self.sync_prompt)
+            self.sync_running.wait()
+
         # TODO: check if filesystem is locked
         try:
-            hash0 = hash(bytes(self.disk))
-            fs = UnixV6FileSystem(bytes(self.disk))
-            fs.sync(unix_dir, local_dir, self.system.terminal)
-            fs.f.seek(0)
-            self.disk = bytearray(fs.f.read())
-            msg = 'Unix directory {} synced with local directory {}\n'.format(unix_dir, local_dir)
+            disk_snapshot = bytes(self.disk)
+            self.fs = UnixV6FileSystem(disk_snapshot)
+            self.fs.start_sync_thread(self._unix_dir, self._local_dir, self.system.terminal)
+
+            self.fs.sync_finished.wait()
+
+            # Replace current disk image with the synced one if Unix is not live
+            if self.system.terminal.prompt_cnt == 0:
+                self.fs.f.seek(0)
+                self.disk = bytearray(self.fs.f.read())
+                self.system.writedebug('Disk image replaced with a synced one\n')
+
+            msg = 'Unix directory {} synced with local directory {}\n'.format(self._unix_dir, self._local_dir)
             self.system.writedebug(msg)
+
         except Exception as e:
             raise e
-        return True
+
+    def sync_prompt(self, last_printed):
+        self.sync_running.set()
 
     def reset(self):
         # Reset registers to default values

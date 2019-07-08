@@ -279,6 +279,30 @@ class UnixV6FileSystem:
                 if nm != name: continue
                 return self.path_i_node(tail, no)
         return None
+    
+    def start_sync_thread(self, unix_dir: 'path', local_dir: 'path', terminal):
+        self._unix_dir = unix_dir
+        self._local_dir = local_dir
+        self._terminal = terminal
+
+        self.sync_running = threading.Event()
+        self.sync_finished = threading.Event()
+        self.sync_finished.clear()
+
+        self.sync_thread = threading.Thread(target=self.sync_method)
+        self.sync_thread.daemon = True
+        self.sync_thread.start()
+
+    def sync_method(self):
+        '''The purpose of this thread is to execute complete syncing.
+        This needs to be done in a separate thread because syncing into live Unix V6 needs to emulate user.
+        Therefore this thread sends commands to Unix, while keeping the CPU ang GUI threads running.
+        '''
+        self.sync(self._unix_dir, self._local_dir, self._terminal)
+        self.sync_finished.set()
+
+    def sync_prompt(self, last_printed):
+        self.sync_running.set()
 
     def sync(self, unix_dir: 'path', local_dir: 'path', terminal=None, root=True):
         '''Synchronizes Unix V6 directory with a local directory.
@@ -293,7 +317,7 @@ class UnixV6FileSystem:
         directly into filesystem if Unix was not loaded yet or takes over the terminal and executes
         necessary commands to create identical file through the operating system.
 
-        This method is based on my directoried comparing script: 
+        Based on my directories comparing script: 
             https://gist.github.com/amakukha/f489cbde2afd32817f8e866cf4abe779
         '''
         # Ensure validity
@@ -405,12 +429,15 @@ class UnixV6FileSystem:
 
         if root and terminal:
             if via_command_line:
-                terminal.queue_command('rm '+TMP_FILENAME, self.prompt_callback)
-                terminal.queue_command('sync', self.prompt_callback)
-                terminal.queue_command('echo "Syncing finished"', self.prompt_callback)
-            else:
-                terminal.writedebug('Syncing finished\n')
-       
+                self.sync_running.clear()
+                terminal.queue_command('rm '+TMP_FILENAME, self.sync_prompt)
+                self.sync_running.wait()
+
+                self.sync_running.clear()
+                terminal.queue_command('sync', self.sync_prompt)
+                self.sync_running.wait()
+            # sync finished @ FS
+
         return cnt if root else (cnt, via_command_line)
 
 
@@ -621,24 +648,27 @@ class UnixV6FileSystem:
         # Input via echo command
         first = True
         for line in lines:
+            self.sync_running.clear()
             terminal.queue_command("echo {q}{line}{q} {a} {fn}".format(
                 q = "'" if b'"' in line else '"',
                 line = line.decode(),
                 a = ' >' if first else '>>',
                 fn = TMP_FILENAME if not text_file else dst
-            ), self.prompt_callback)
+            ), self.sync_prompt)
+            self.sync_running.wait()
             first = False
         if not text_file:
             if lines:
-                terminal.queue_command('base64 -D -i "{}" -o "{}"'.format(TMP_FILENAME, dst), self.prompt_callback)
+                self.sync_running.clear()
+                terminal.queue_command('base64 -D -i "{}" -o "{}"'.format(TMP_FILENAME, dst), self.sync_prompt)
+                self.sync_running.wait()
             else:
                 # File is empty
-                terminal.queue_command('touch "{}"'.format(dst), self.prompt_callback)
+                self.sync_running.clear()
+                terminal.queue_command('touch "{}"'.format(dst), self.sync_prompt)
+                self.sync_running.wait()
 
         return self.path_i_node(dst)
-
-    def prompt_callback(self, last_printed):
-        pass
 
     def upload_file(self, src: str, dst: str):
         fnode = self.path_i_node(dst)      # inode of the file to be overwritten

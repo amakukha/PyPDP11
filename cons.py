@@ -133,7 +133,7 @@ class Terminal(ttk.Frame):
         self.load_button.grid(row=0, column=4, sticky=tk.W)
         self.sync1_label = ttk.Label(self.bottom, text='Unix V6:')
         self.sync1_label.grid(row=0, column=5, sticky=tk.W)
-        self.sync1_entry = ttk.Entry(self.bottom, text='/usr/pub', width=9)
+        self.sync1_entry = ttk.Entry(self.bottom, width=9)
         self.sync1_entry.grid(row=0, column=6, sticky=tk.W)
         self.sync1_entry.insert(0, '/usr/pub')
         self.sync2_label = ttk.Label(self.bottom, text='Local:')

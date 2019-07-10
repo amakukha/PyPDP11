@@ -332,10 +332,18 @@ class UnixV6FileSystem:
         Based on my directories comparing script: 
             https://gist.github.com/amakukha/f489cbde2afd32817f8e866cf4abe779
         '''
+        via_terminal = False
+
         # Ensure validity
         dnode = self.path_i_node(unix_dir)
         if dnode is None:
-            raise SyncError('"{}" not found in filesystem'.format(unix_dir))
+            if not root:
+                if terminal is not None and terminal.prompt_cnt != 0:
+                    via_terminal = False
+                    self.command_wait('mkdir {}'.format(unix_dir), terminal)
+                dnode = self.mkdir(unix_dir)
+            if dnode is None:
+                raise SyncError('"{}" not found in filesystem'.format(unix_dir))
         if not dnode.is_dir():
             raise ValueError('"{}" is not Unix V6 directory'.format(unix_dir))
         if not os.path.exists(local_dir):
@@ -360,7 +368,6 @@ class UnixV6FileSystem:
             else:
                 terminal.writedebug(msg + '\n')
 
-        via_terminal = False
         def download(uitem, ldir):
             show_message('DOWNLOAD: {} into {}'.format(uitem[1], local_dir))
             local_fn = os.path.join(local_dir, uitem[0])
@@ -568,7 +575,7 @@ class UnixV6FileSystem:
         self.write_superblock(sup)
             
 
-    def mkdir(self, dst):
+    def mkdir(self, dst: 'path') -> INode:
         # Check correctness
         node = self.path_i_node(dst)
         if node:
@@ -581,8 +588,8 @@ class UnixV6FileSystem:
             raise ValueError("destination parent not found")
 
         # Allocate inode & block (new directory - always one block)
-        node = fs.allocate_i_node()
-        block = fs.allocate_block()
+        node = self.allocate_i_node()
+        block = self.allocate_block()
         
         # Write block
         data  = struct.pack('H', node.inode)
@@ -600,6 +607,8 @@ class UnixV6FileSystem:
 
         # Add directory inode to parent directory
         self.add_to_directory(pnode, node, name)
+
+        return node
 
     def add_to_directory(self, dnode, fnode, name):
         dnode = self.ensure_i_node(dnode)

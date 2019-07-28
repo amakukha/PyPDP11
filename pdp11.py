@@ -100,6 +100,8 @@ class PDP11:
 
     def reset(self):
         self.running.clear()
+        self.clock_running = False  # do not enter wait mode until sure that the clock is running
+                                    # otherwise - probably in the boot screen, clock interrupt doesn't work (TODO)
 
         self.R = [0, 0, 0, 0, 0, 0, 0, 0]       # registers
         self.KSP = 0        # kernel mode stack pointer
@@ -108,12 +110,12 @@ class PDP11:
         self.curPC = 0      # address of current instruction
         self.instr = 0      # current instruction
         self.memory = array.array('H', bytearray(256*1024*[0]))     # 128K of 16-bit unsigned values
-        self.ips = 0
+        self.iter_cnt = 0
+        self.step_cnt = 0   # unlike iter_cnt doesn't get reset by clock interrupt
         self.SR0 = 0
         self.curuser = False
         self.prevuser = False
         self.LKS = 0x80     # Line Frequency Clock
-        self.step_cnt = 0
 
         # from reset():
         for i in range(len(PDP11.BOOTROM)):
@@ -448,9 +450,12 @@ class PDP11:
         if vec & 1:
             self.panic("Thou darst calling interrupt() with an odd vector number?")
         self.interrupts.put(Interrupt(vec, pri))
+        if vec == INT.CLOCK:
+            self.clock_running = True
         self.running.set()
 
     def clock(self):
+        '''Clock thread'''
         self.clock_cnt = 0
         self.last_time = time.time()
 
@@ -467,9 +472,9 @@ class PDP11:
             self.clock_cnt += 1
             if self.clock_cnt & 0xF == 0:
                 now = time.time()
-                self.terminal.ips = int(self.ips/(now - self.last_time))
+                self.terminal.ips = int(self.iter_cnt/(now - self.last_time))
                 self.last_time = now
-                self.ips = 0
+                self.iter_cnt = 0
 
         print('- clock stopped')
 
@@ -505,7 +510,7 @@ class PDP11:
         #var prev;
         if vec & 1:
             self.panic("Thou darst calling trapat() with an odd vector number?")
-        self.writedebug("trap " + ostr(vec) + " occured: " + msg + "\n")
+        self.writedebug("trap " + ostr(vec) + " occurred: " + msg + "\n")
         self.printstate()
         try:
             prev = self.PS
@@ -603,7 +608,7 @@ class PDP11:
 
     def step(self):
         #var val, val1, val2, ia, da, sa, d, s, l, r, o, max, maxp, msb;
-        self.ips += 1
+        self.iter_cnt += 1
         self.step_cnt += 1
         self.curPC = self.R[7]
         ia = self.decode(self.R[7], False, self.curuser)            # instruction address
@@ -1210,7 +1215,7 @@ class PDP11:
             try:
                 self.step()
 
-                if not self.running.is_set():
+                if not self.running.is_set() and self.clock_running:
                     self.running.wait()
                     interrupted_from_wait = True
 

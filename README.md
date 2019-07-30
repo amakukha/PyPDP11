@@ -34,6 +34,7 @@ python3 -c 'import tkinter; print(tkinter.TclVersion)'
   2. Press button `Start routine` to run the OS.
 
 Note: Unix V6 used `chdir` command instead of `cd`. Issuing `stty -lcase` is needed to enable lowercase output.
+Instead of `Ctrl+C`, press Backspace if you want to halt execution of a program.
 
 Don't forget to issue the `sync` command before exporting the disk image (it flushes the delayed I/O to disk).
 
@@ -49,10 +50,23 @@ Compared to the original JavaScript code, this implementation has the following 
 ## Where are the manuals?
 The disk image included into this repository misses on most
 [sources](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/source),
-[manual pages](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/man) and
+[man pages](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/man) and
 [documentation](https://github.com/eunuchs/unix-archive/tree/master/PDP-11/Trees/V6/usr/doc).
 It is unsurprising, knowing that RK05 disk could only contain around 2.5 MB of data, while the
 Unix V6 sources alone measure beyond that capacity.
 
 Complete Unix V6 manual in somewhat searchable PDF can be found
 [here](https://ia800600.us.archive.org/19/items/v6-manual/v6-manual.pdf).
+
+## How does syncing work?
+
+The syncing function uses modification time of files to track changes between synchronized directories. Since Unix V6 does not support modern dates, lower 24 bits of modtime in Unix V6 filesystem are used for time, and higher 8 bits are used to mark that files were synced. Files are considered in sync if their modification time (24 bits of it) match within 1 minutes. Any synced files in Unix V6 filesystem will appear as having modification year of 1981.
+
+To perform syncing, the GUI compares local directory with a Unix V6 directory finding pairs of files with the same name. When a file or subdirectory exists in one filesystem, but not in the other, it is simply created where it is absent. When an unsynchronized pair of files is observed, the following actions are taken:
+ - if the files were never synchronized before, they are *downloaded*: copied from Unix V6 into local directory
+ - if the files were modified inside Unix V6, they are also downloaded
+ - if the files were modified locally and were synced to Unix V6 more than a minute ago, they are *uploaded*: copied from local directory to Unix V6 
+
+The emulator can synchronize files both before Unix V6 is loaded and after. When Unix V6 is not running (in the boot screen), the RK05 disk image is accessed and manipulated directly.
+
+When Unix V6 is running, at first, the GUI issues a `sync` command, forcing the OS to flush any delayed I/O to disk. After that, the synchronized Unix directory is compared to a local directory via direct access to the disk image. All necessary changes on the Unix side are then performed via executing commands in the Unix terminal. This can be time-consuming, so be patient and don't press any buttons until syncing completes.

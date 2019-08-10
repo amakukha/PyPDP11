@@ -15,12 +15,13 @@ INODE_SIZE = 32
 BIGGEST_NOT_HUGE_SIZE = BLOCK_SIZE*BLOCK_SIZE/2*8
 
 # Higher bytes of file modtime used by PyPDP11 for syncing and creating
-CREATED_BY_PYPDP11 = 0x13000000         # all in 1980
-SYNCED_BY_PYPDP11  = 0x15000000         # all in 1981
+CREATED_BY_PYPDP11 = 0x17000000         # all within 1982 Summer time (EDT)
+SYNCED_BY_PYPDP11  = 0x19000000         # all within 1983 Summer time (EDT)
 
 TMP_FILENAME = 'tmp.b64'
 TIME_DELTA = 60
 TIME_ERROR_S = 47                       # it's unclear why the difference appears to be 47 on my machine TODO
+TIME_ZONE_OFFSET = 14400
 
 # TODO:
 # - check that all the non-free nodes (according to the chain) are actually used 
@@ -402,8 +403,8 @@ class UnixV6FileSystem:
                         sync_subdirs.append((ufs[ui][1], lfs[li][1]))
                     else:
                         # COMPARE FILES
-                        umtime = ufs[ui][3].modtime
-                        lmtime = int(os.stat(lfs[li][1]).st_mtime)
+                        umtime = ufs[ui][3].modtime                     #  Unix modtime
+                        lmtime = int(os.stat(lfs[li][1]).st_mtime)      # local modtime
                         if (umtime & 0xFF000000) not in [CREATED_BY_PYPDP11, SYNCED_BY_PYPDP11]:
                             download(ufs[ui], local_dir)
                         elif abs((umtime & 0xFFFFFF) - (lmtime & 0xFFFFFF) + TIME_ERROR_S)>TIME_DELTA:
@@ -649,7 +650,7 @@ class UnixV6FileSystem:
     def mark_synced_via_terminal(self, local_fn: 'path', unix_fn: 'path', terminal):
         '''Syncs modtime of a Unix file to indicate that it is synced with a local file'''
         modtime = self.synctime(local_fn) 
-        tz_offset = 18000
+        tz_offset = TIME_ZONE_OFFSET
         date = datetime.datetime.utcfromtimestamp(modtime-tz_offset).strftime('%m%d%H%M%y')
         self.command_wait('date {}'.format(date), terminal)
         

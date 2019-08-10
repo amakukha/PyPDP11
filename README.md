@@ -60,7 +60,7 @@ Complete Unix V6 manual in somewhat searchable PDF can be found
 
 ## How does syncing work?
 
-The syncing function uses modification time of files to track changes between synchronized directories. Since Unix V6 does not support modern dates, lower 24 bits of modtime in Unix V6 filesystem are used for time, and higher 8 bits are used to mark that files were synced. Files are considered in sync if their modification time (24 bits of it) match within 1 minutes. Any synced files in Unix V6 filesystem will appear as having modification year of 1981.
+The syncing function uses modification time of files to track changes between synchronized directories. Since Unix V6 does not support modern dates, lower 24 bits of modtime in Unix V6 filesystem are used for current local time. Higher 8 bits are used to mark that files were synced. Files are considered in sync if their modification time (24 bits of it) match within 1 minutes. Any synced files in Unix V6 filesystem will appear as having modification year of 1983.
 
 To perform syncing, the GUI compares local directory with a Unix V6 directory finding pairs of files with the same name. When a file or subdirectory exists in one filesystem, but not in the other, it is simply created where it is absent. When an unsynchronized pair of files is observed, the following actions are taken:
  - if the files were never synchronized before, they are *downloaded*: copied from Unix V6 into local directory

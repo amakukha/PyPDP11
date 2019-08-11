@@ -449,4 +449,5 @@ class Terminal(ttk.Frame):
             self.ips_label.config(text='IPS ={:-4.0f}K'.format(self.ips/1000))
         else:
             self.ips_label.config(text='IPS ={:-5d}'.format(self.ips))
+        self.master.update_idletasks()
         self.master.after(1000, self._show_ips)

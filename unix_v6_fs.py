@@ -262,7 +262,11 @@ class UnixV6FileSystem:
         for i in range(0, len(data), 16):
             inum, name = struct.unpack('H14s', data[i:i+16])
             if inum > 0:
-                name = name.decode().rstrip('\x00')
+                try:
+                    name = name.decode().rstrip('\x00')
+                except Exception as e:
+                    print('ERROR: could not decode filename:',repr(name))
+                    raise e
                 files.append((inum, name))
         return files
 

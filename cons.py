@@ -16,6 +16,7 @@ import tkinter.font as tkfont
 import tkinter.scrolledtext as scrolledtext
 
 AUTOSTART_TIMEOUT_S = 15    # how many seconds to wait for user input before loading Unix automatically?
+HINT_TIMEOUT_S = 3          # how many seconds to wait before showing a hint
 GUI_MSPF = 50               # milliseconds per "frame"
 
 def ostr(d, n=6):
@@ -88,7 +89,8 @@ class Terminal(ttk.Frame):
         self.createWidgets()
 
         self.master.after(GUI_MSPF, self.process_queue)
-        self.master.after(AUTOSTART_TIMEOUT_S*1000, self.autostart)
+        self.master.after(int(HINT_TIMEOUT_S*1000), self.hint)
+        self.master.after(int(AUTOSTART_TIMEOUT_S*1000), self.autostart)
         self.master.after(1000, self._show_ips)
 
 
@@ -135,7 +137,7 @@ class Terminal(ttk.Frame):
         self.sync1_label.grid(row=0, column=5, sticky=tk.W)
         self.sync1_entry = ttk.Entry(self.bottom, width=9)
         self.sync1_entry.grid(row=0, column=6, sticky=tk.W)
-        self.sync1_entry.insert(0, '/usr/pub')
+        self.sync1_entry.insert(0, '/usr/ken')
         self.sync2_label = ttk.Label(self.bottom, text='Local:')
         self.sync2_label.grid(row=0, column=7, sticky=tk.W)
         self.sync2_entry = ttk.Entry(self.bottom, text='data', width=9)
@@ -149,6 +151,18 @@ class Terminal(ttk.Frame):
     def console_focus(self, event):
         # Triggered by click or double-click
         self.console.focus_set()
+
+    def hint(self):
+        # Triggered by timer
+        self.debug.println('Press "Start routine" button below if you don\'t know where to start.')
+
+    def autostart(self):
+        # Triggered by timer
+        if self.first == '':
+            self.manual_start = False
+            self.debug.println("Autostart (waiting in the boot screen eats up CPU cycles).")
+            self.start_commands += ['date\n']
+            self.start_routine()
 
     def autostart(self):
         # Triggered by timer

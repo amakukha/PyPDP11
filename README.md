@@ -73,10 +73,10 @@ The emulator can synchronize files both before Unix V6 is loaded and after. When
 
 When Unix V6 is running, at first, the GUI issues a `sync` command, forcing the OS to flush any delayed I/O to disk. After that, the synchronized Unix directory is compared to a local directory via direct access to the disk image. All necessary changes on the Unix side are then performed via executing commands in the Unix terminal. This can be time-consuming, so be patient and don't press any buttons until syncing completes.
 
-## Wishlist
-
-This project was used successfully, but only on MacOS. If you are willing to help, please, let me know if it runs on Linux and/or Windows.
-
 ## Why did I write this project?
 
 This emulator was used to restore Doug McIlroy's [TMG](https://github.com/amakukha/tmg) compiler-compiler. I ported this tool from PDP-11 assembly to modern C as a result.
+
+## Wishlist
+
+This project was used successfully, but only on MacOS. If you are willing to help, please, let me know if it runs on Linux and/or Windows.

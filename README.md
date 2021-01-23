@@ -33,7 +33,7 @@ python3 -c 'import tkinter; print(tkinter.TclVersion)'
   1. Run the file `pdp11.py` with Python.
   2. Press button `Start routine` to run the OS.
 
-Note: Unix V6 used `chdir` command instead of `cd`. Issuing `stty -lcase` is needed to enable lowercase output.
+Notes: Unix V6 used `chdir` command instead of `cd`. Issuing `stty -lcase` is needed to enable lowercase output.
 Instead of `Ctrl+C`, press Backspace if you want to halt execution of a program.
 
 If you want to export the disk image for whatever reason, don't forget to issue the `sync` command first (it flushes the delayed I/O to disk).
@@ -45,7 +45,7 @@ Compared to the original JavaScript code, this implementation has the following 
  - syncing a directory between Unix V6 and your machine
  - saving and loading the disk state
  - faster output 
- - some commands are backported and included into the image (see [tools](https://github.com/amakukha/PyPDP11/tree/master/tools) directory)
+ - some commands were backported and included into the image (see [tools](https://github.com/amakukha/PyPDP11/tree/master/tools) directory)
 
 ## Where are the manuals?
 The disk image included into this repository misses on most
@@ -72,3 +72,11 @@ To perform syncing, the emulator compares local directory with a Unix V6 directo
 The emulator can synchronize files both before Unix V6 is loaded and after. When Unix V6 is not running (in the boot screen), the RK05 disk image is accessed and manipulated directly.
 
 When Unix V6 is running, at first, the GUI issues a `sync` command, forcing the OS to flush any delayed I/O to disk. After that, the synchronized Unix directory is compared to a local directory via direct access to the disk image. All necessary changes on the Unix side are then performed via executing commands in the Unix terminal. This can be time-consuming, so be patient and don't press any buttons until syncing completes.
+
+## Wishlist
+
+This project was used successfully, but only on MacOS. If you are willing to help, please, let me know if it runs on Linux and/or Windows.
+
+## Why did I write this project?
+
+This emulator was used to restore Doug McIlroy's [TMG](https://github.com/amakukha/tmg) compiler-compiler. I ported this tool from PDP-11 assembly to modern C as a result.

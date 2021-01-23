@@ -36,7 +36,7 @@ python3 -c 'import tkinter; print(tkinter.TclVersion)'
 Note: Unix V6 used `chdir` command instead of `cd`. Issuing `stty -lcase` is needed to enable lowercase output.
 Instead of `Ctrl+C`, press Backspace if you want to halt execution of a program.
 
-Don't forget to issue the `sync` command before exporting the disk image (it flushes the delayed I/O to disk).
+If you want to export the disk image for whatever reason, don't forget to issue the `sync` command first (it flushes the delayed I/O to disk).
 
 ## What's new
 Compared to the original JavaScript code, this implementation has the following benefits:
@@ -60,9 +60,11 @@ Complete Unix V6 manual in somewhat searchable PDF can be found
 
 ## How does syncing work?
 
-The syncing function uses modification time of files to track changes between synchronized directories. Since Unix V6 does not support modern dates, lower 24 bits of modtime in Unix V6 filesystem are used for current local time. Higher 8 bits are used to mark that files were synced. Files are considered in sync if their modification time (24 bits of it) match within 1 minutes. Any synced files in Unix V6 filesystem will appear as having modification year of 1983.
+The syncing function allows you to sychronize a folder between your working OS and the emulated Unix V6. For this purpose, it uses modification time of files to track changes between synchronized directories. 
 
-To perform syncing, the GUI compares local directory with a Unix V6 directory finding pairs of files with the same name. When a file or subdirectory exists in one filesystem, but not in the other, it is simply created where it is absent. When an unsynchronized pair of files is observed, the following actions are taken:
+Because Unix V6 does not support modern dates, lower 24 bits of modtime in Unix V6 filesystem are used for current local time. Higher 8 bits are used to mark that files were synced. Files are considered in sync if their modification time (24 bits of it) match within 1 minutes. Any synced files within Unix V6 filesystem will appear as having modification year of 1983.
+
+To perform syncing, the emulator compares local directory with a Unix V6 directory finding pairs of files with the same name. When a file or subdirectory exists in one filesystem, but not in the other, it is simply created where it is absent. When an unsynchronized pair of files is observed, the following actions are taken:
  - if the files were never synchronized before, they are *downloaded*: copied from Unix V6 into local directory
  - if the files were modified inside Unix V6, they are also downloaded
  - if the files were modified locally and were synced to Unix V6 more than a minute ago, they are *uploaded*: copied from local directory to Unix V6 

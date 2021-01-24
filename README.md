@@ -31,12 +31,13 @@ python3 -c 'import tkinter; print(tkinter.TclVersion)'
 ## Usage
 
   1. Run the file `pdp11.py` with Python.
-  2. Press button `Start routine` to run the OS.
+  2. Press button `Start routine` to run the OS. This will start a [Unix shell](https://en.wikipedia.org/wiki/Unix_shell).
 
-Notes: Unix V6 used `chdir` command instead of `cd`. Issuing `stty -lcase` is needed to enable lowercase output.
-Instead of `Ctrl+C`, press Backspace if you want to halt execution of a program.
-
-If you want to export the disk image for whatever reason, don't forget to issue the `sync` command first (it flushes the delayed I/O to disk).
+Additional usage notes: 
+  - Instead `cd`, Unix V6 shell used `chdir` command. 
+  - Issuing command `stty -lcase` is needed to enable lowercase output. (In case you are wondering.)
+  - Instead of `Ctrl+C`, press Backspace button if you want to halt execution of a program.
+  - If you want to export the disk image for whatever reason, don't forget to execute the `sync` command first (it flushes the delayed I/O to disk).
 
 ## What's new
 Compared to the original JavaScript code, this implementation has the following benefits:
@@ -60,7 +61,7 @@ Complete Unix V6 manual in somewhat searchable PDF can be found
 
 ## How does syncing work?
 
-The syncing function allows you to sychronize a folder between your working OS and the emulated Unix V6. For this purpose, it uses modification time of files to track changes between synchronized directories. 
+The syncing function allows you to sychronize a folder between your working OS and the emulated Unix V6. For this purpose, modification time of files is used to track changes between synchronized directories. 
 
 Because Unix V6 does not support modern dates, lower 24 bits of modtime in Unix V6 filesystem are used for current local time. Higher 8 bits are used to mark that files were synced. Files are considered in sync if their modification time (24 bits of it) match within 1 minutes. Any synced files within Unix V6 filesystem will appear as having modification year of 1983.
 
@@ -75,7 +76,7 @@ When Unix V6 is running, at first, the GUI issues a `sync` command, forcing the 
 
 ## Why did I write this project?
 
-This emulator was used to restore Doug McIlroy's [TMG](https://github.com/amakukha/tmg) compiler-compiler. I ported this tool from PDP-11 assembly to modern C as a result.
+This emulator was used to restore Doug McIlroy's [TMG](https://github.com/amakukha/tmg) compiler-compiler. I ported TMG from PDP-11 assembly to modern C, using this emulator for compiling the assembly code and validation.
 
 ## Wishlist
 

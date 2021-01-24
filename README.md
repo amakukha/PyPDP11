@@ -31,10 +31,10 @@ python3 -c 'import tkinter; print(tkinter.TclVersion)'
 ## Usage
 
   1. Run the file `pdp11.py` with Python.
-  2. Press button `Start routine` to run the OS. This will start a [Unix shell](https://en.wikipedia.org/wiki/Unix_shell).
+  2. Press button `Start routine` to run the OS. This will start the [Unix shell](https://en.wikipedia.org/wiki/Unix_shell).
 
 Additional usage notes: 
-  - Instead `cd`, Unix V6 shell used `chdir` command. 
+  - Instead of `cd`, Unix V6 shell used `chdir` command. 
   - Issuing command `stty -lcase` is needed to enable lowercase output. (In case you are wondering.)
   - Instead of `Ctrl+C`, press Backspace button if you want to halt execution of a program.
   - If you want to export the disk image for whatever reason, don't forget to execute the `sync` command first (it flushes the delayed I/O to disk).

@@ -7,6 +7,12 @@
 
 import struct, os, array, time, datetime, io, string, threading, base64
 
+localjoin = os.path.join
+def unixjoin(head, *args):
+    for path in args:
+        head = head + '/' + path
+    return head
+
 DISK_IMAGE_FILENAME = 'rk0.img'
 
 SUPERBLOCK_SIZE = 415
@@ -358,8 +364,8 @@ class UnixV6FileSystem:
             raise SyncError('local directory "{}" not found'.format(local_dir))
 
         # Get lists of files
-        ufs = [(fn, os.path.join(unix_dir, fn), self.read_i_node(inum)) for inum, fn in self.list_dir(dnode)]
-        lfs = [(fn, os.path.join(local_dir, fn)) for fn in os.listdir(local_dir)]
+        ufs = [(fn, unixjoin(unix_dir, fn), self.read_i_node(inum)) for inum, fn in self.list_dir(dnode)]
+        lfs = [(fn, localjoin(local_dir, fn)) for fn in os.listdir(local_dir)]
 
         # Determine type
         ufs = sorted([(fn, pth, node.is_dir(), node) for fn, pth, node in ufs if fn[0]!='.'])
@@ -375,7 +381,7 @@ class UnixV6FileSystem:
 
         def download(uitem, ldir):
             show_message('DOWNLOAD: {} into {}'.format(uitem[1], local_dir))
-            local_fn = os.path.join(local_dir, uitem[0])
+            local_fn = localjoin(local_dir, uitem[0])
             self.download_file(uitem[3], local_fn)
             # Set the synced flags
             if terminal is None or terminal.prompt_cnt == 0:
@@ -388,7 +394,7 @@ class UnixV6FileSystem:
         def upload(litem, udir):
             nonlocal via_terminal
             show_message('UPLOAD: {} into {}'.format(litem[1], unix_dir))
-            dst_fn = os.path.join(unix_dir, litem[0])
+            dst_fn = unixjoin(unix_dir, litem[0])
             if terminal is None or terminal.prompt_cnt == 0:
                 node = self.upload_file(litem[1], dst_fn)
                 # Set the local time
@@ -419,13 +425,13 @@ class UnixV6FileSystem:
                 ui += 1;  li += 1
             elif ufs[ui][0] < lfs[li][0]:
                 if ufs[ui][2]:
-                    sync_subdirs.append((ufs[ui][1], os.path.join(local_dir, ufs[ui][0])))
+                    sync_subdirs.append((ufs[ui][1], localjoin(local_dir, ufs[ui][0])))
                 else:
                     download(ufs[ui], local_dir)
                 ui += 1
             else:
                 if lfs[li][2]:
-                    sync_subdirs.append((os.path.join(unix_dir, lfs[li][0]), lfs[li][1]))
+                    sync_subdirs.append((unixjoin(unix_dir, lfs[li][0]), lfs[li][1]))
                 else:
                     upload(lfs[li], unix_dir) 
                 li += 1
@@ -434,14 +440,14 @@ class UnixV6FileSystem:
         # TODO: repeating code, DRY it
         while ui < len(ufs):
             if ufs[ui][2]:
-                sync_subdirs.append((ufs[ui][1], os.path.join(local_dir, ufs[ui][0])))
+                sync_subdirs.append((ufs[ui][1], localjoin(local_dir, ufs[ui][0])))
             else:
                 download(ufs[ui], local_dir)
             ui += 1
             cnt += 1
         while li < len(lfs):
             if lfs[li][2]:
-                sync_subdirs.append((os.path.join(unix_dir, lfs[li][0]), lfs[li][1]))
+                sync_subdirs.append((unixjoin(unix_dir, lfs[li][0]), lfs[li][1]))
             else:
                 upload(lfs[li], unix_dir)
             li += 1
@@ -480,7 +486,7 @@ class UnixV6FileSystem:
             node = self.read_i_node(inum)
             contents = self.read_file(inum)
             if not node.is_dir() and save_path is not None:
-                filepath = os.path.join(save_path, name)
+                filepath = localjoin(save_path, name)
                 open(filepath, 'wb').write(contents)
             print('{name:15s}\t{size}\t{flags}\tsum={sum}\t{nlinks:d}\t{modtime:x}'.format(
                         name = name + ('/' if node.is_dir() else ' '),
@@ -497,7 +503,7 @@ class UnixV6FileSystem:
                 if save_path is None:
                     sz, blk_sz = self.tree(inum, None, tabs + 4)
                 else:
-                    dirpath = os.path.join(save_path, name)
+                    dirpath = localjoin(save_path, name)
                     os.mkdir(dirpath)
                     sz, blk_sz = self.tree(inum, dirpath, tabs + 4)
                 size += sz
@@ -547,7 +553,7 @@ class UnixV6FileSystem:
         # "the information as to whether the inode is really free or not is maintained in the inode itself"
         node = self.ensure_i_node(inode)
         node.set_free()
-        selr.write_i_node(node)
+        self.write_i_node(node)
 
     def allocate_block(self):
         # Returns block number
@@ -713,9 +719,9 @@ class UnixV6FileSystem:
                 fnode = None
                 dirpath = dst
                 dstname = os.path.split(src)[1]
-                fnode = self.path_i_node(os.path.join(dirpath, dstname))
+                fnode = self.path_i_node(unixjoin(dirpath, dstname))
                 if fnode:
-                    print('Overwriting file:', os.path.join(dirpath, dstname))
+                    print('Overwriting file:', unixjoin(dirpath, dstname))
             else:
                 print('Overwriting:', dst)
         if dstname is None:

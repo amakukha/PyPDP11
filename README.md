@@ -1,9 +1,9 @@
 ## PyPDP11
-PDP-11 emulator for Python 3 with GUI. 
+PDP-11 emulator in Python 3 with GUI. 
 
 It runs the Version 6 Unix operating system (1975), the code of which was famously covered by *A Commentary on the Unix Operating System* (1976) by John Lions.
 
-This project is based on [Julius Schmidt's PDP-11 emulator](http://pdp11.aiju.de) for JavaScript, which you can run in a browser.
+This project is based on [Julius Schmidt's PDP-11 emulator](http://pdp11.aiju.de) in JavaScript, which you can run in a browser.
 
 Example screenshots:
 <p align="center">
@@ -76,7 +76,7 @@ When Unix V6 is running, at first, the GUI issues a `sync` command, forcing the 
 
 ## Why did I write this project?
 
-This emulator was used to restore Doug McIlroy's [TMG](https://github.com/amakukha/tmg) compiler-compiler. I ported TMG from PDP-11 assembly to modern C, using this emulator for compiling the assembly code and validation.
+This emulator was used to restore Doug McIlroy's [TMG](https://github.com/amakukha/tmg) compiler-compiler. I ported TMG from PDP-11 assembly to modern C. I used this emulator for compile the original assembly code and running it, making sure my port functions the same way as the original tool.
 
 ## Wishlist
 

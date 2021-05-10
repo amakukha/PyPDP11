@@ -76,7 +76,7 @@ When Unix V6 is running, at first, the GUI issues a `sync` command, forcing the 
 
 ## Why did I write this project?
 
-This emulator was used to restore Doug McIlroy's [TMG](https://github.com/amakukha/tmg) compiler-compiler. I ported TMG from PDP-11 assembly to modern C. I used this emulator for compile the original assembly code and running it, making sure my port functions the same way as the original tool.
+This emulator was used to restore Doug McIlroy's [TMG](https://github.com/amakukha/tmg) compiler-compiler. I ported TMG from PDP-11 assembly to modern C. I used this emulator for compile the original assembly code and run it, making sure my port functions the same way as the original.
 
 ## Wishlist
 

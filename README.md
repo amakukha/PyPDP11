@@ -61,9 +61,9 @@ Complete Unix V6 manual in somewhat searchable PDF can be found
 
 ## How does syncing work?
 
-The syncing function allows you to synchronize a folder between your working OS and the emulated Unix V6. For this purpose, modification time of files is used to track changes between synchronized directories. 
+The syncing feature allows you to synchronize a folder between your working OS and the emulated Unix V6. For this purpose, modification time of files is used to track changes between synchronized directories. 
 
-Because Unix V6 does not support modern dates, lower 24 bits of modtime in Unix V6 filesystem are used for current local time. Higher 8 bits are used to mark that files were synced. Files are considered in sync if their modification time (24 bits of it) match within 1 minutes. Any synced files within Unix V6 filesystem will appear as having modification year of 1983.
+Because Unix V6 does not support modern dates, lower 24 bits of modtime in Unix V6 filesystem are used for current local time. Higher 8 bits are used to mark that files were synced. Files are considered in sync if their modification time (24 bits of it) match within 1 minute. Any synced files within Unix V6 filesystem will appear as having modification year of 1983.
 
 To perform syncing, the emulator compares local directory with a Unix V6 directory finding pairs of files with the same name. When a file or subdirectory exists in one filesystem, but not in the other, it is simply created where it is absent. When an unsynchronized pair of files is observed, the following actions are taken:
  - if the files were never synchronized before, they are *downloaded*: copied from Unix V6 into local directory
@@ -72,7 +72,7 @@ To perform syncing, the emulator compares local directory with a Unix V6 directo
 
 The emulator can synchronize files both before Unix V6 is loaded and after. When Unix V6 is not running (in the boot screen), the RK05 disk image is accessed and manipulated directly.
 
-When Unix V6 is running, at first, the GUI issues a `sync` command, forcing the OS to flush any delayed I/O to disk. After that, the synchronized Unix directory is compared to a local directory via direct access to the disk image. All necessary changes on the Unix side are then performed via executing commands in the Unix terminal. This can be time-consuming, so be patient and don't press any buttons until syncing completes.
+When Unix V6 is running, at first, the GUI issues a `sync` command to Unix, forcing the OS to flush any delayed I/O to disk. After that, the synchronized Unix directory is compared to a local directory via direct access to the disk image. All necessary changes on the Unix side are then performed via executing commands in the Unix terminal. This can be time-consuming, so be patient and don't press any buttons until syncing completes.
 
 ## Why did I write this project?
 

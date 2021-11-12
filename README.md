@@ -61,7 +61,7 @@ Complete Unix V6 manual in somewhat searchable PDF can be found
 
 ## How does syncing work?
 
-The syncing feature allows you to synchronize a folder between your working OS and the emulated Unix V6. For this purpose, modification time of files is used to track changes between synchronized directories. 
+The syncing feature allows you to synchronize a folder between your host OS and the emulated Unix V6. For this purpose, modification time of files is used to track changes between synchronized directories. 
 
 Because Unix V6 does not support modern dates, lower 24 bits of modtime in Unix V6 filesystem are used for current local time. Higher 8 bits are used to mark that files were synced. Files are considered in sync if their modification time (24 bits of it) match within 1 minute. Any synced files within Unix V6 filesystem will appear as having modification year of 1983.
 

@@ -252,10 +252,15 @@ class Terminal(ttk.Frame):
                 self.control_pressed = True
             self.update_ctrl()
         ch = event.char
+
+        # Special handling of Enter / Return
+        if ch in ['\r', '\n'] or event.keysym == 'Return':
+            # TODO: will it work on Windows?
+            ch = '\n'
+
         if len(ch)==1 and ord(ch)<256:
 
             # Process input to show the hint
-            if ch == '\r': ch = '\n' # TODO: will it work on Windows?
             if self.first != None:
                 if ch == '\n':
                     if self.first != 'unix':
@@ -283,7 +288,7 @@ class Terminal(ttk.Frame):
 
             #  Pass the character to the OS
             self.keybuff_lock.acquire()
-            self._addchar(ord(event.char))
+            self._addchar(ord(ch))
             self.keybuff_lock.release()
 
     def request_reset(self):

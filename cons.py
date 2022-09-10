@@ -164,14 +164,6 @@ class Terminal(ttk.Frame):
             self.start_commands += ['date\n']
             self.start_routine()
 
-    def autostart(self):
-        # Triggered by timer
-        if self.first == '':
-            self.manual_start = False
-            self.debug.println("Autostart (waiting in the boot screen eats up CPU cycles).")
-            self.start_commands += ['date\n']
-            self.start_routine()
-
     def start_routine(self):
         if self.prompt_cnt == 0:
             self.paste('unix\n')
